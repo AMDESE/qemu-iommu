@@ -26,6 +26,7 @@
 #include "hw/pci/pci_bus.h"
 #include "migration/vmstate.h"
 #include "amd_iommu.h"
+#include "amd_iommu_helper.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "hw/i386/apic_internal.h"
@@ -87,6 +88,8 @@ uint64_t amdvi_extended_feature_register(AMDVIState *s)
     return feature;
 }
 
+//SURAVEE: MOVE
+#if 0
 /* configure MMIO registers at startup/reset */
 static void amdvi_set_quad(AMDVIState *s, hwaddr addr, uint64_t val,
                            uint64_t romask, uint64_t w1cmask)
@@ -162,6 +165,7 @@ static void amdvi_assign_andq(AMDVIState *s, hwaddr addr, uint64_t val)
 {
    amdvi_writeq_raw(s, addr, amdvi_readq(s, addr) & val);
 }
+#endif
 
 static void amdvi_generate_msi_interrupt(AMDVIState *s)
 {
