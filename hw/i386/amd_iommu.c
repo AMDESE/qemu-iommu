@@ -58,6 +58,8 @@ const char *amdvi_mmio_high[] = {
     "UNHANDLED"
 };
 
+//SURAVEE: MOVE
+#if 0
 struct AMDVIAddressSpace {
     uint8_t bus_num;            /* bus number                           */
     uint8_t devfn;              /* device function                      */
@@ -68,6 +70,7 @@ struct AMDVIAddressSpace {
     MemoryRegion iommu_ir;      /* Device's interrupt remapping region  */
     AddressSpace as;            /* device's corresponding address space */
 };
+#endif
 
 /* AMDVI cache entry */
 typedef struct AMDVIIOTLBEntry {

@@ -375,4 +375,14 @@ struct AMDVIState {
 
 uint64_t amdvi_extended_feature_register(AMDVIState *s);
 
+struct AMDVIAddressSpace {
+    uint8_t bus_num;            /* bus number                           */
+    uint8_t devfn;              /* device function                      */
+    AMDVIState *iommu_state;    /* AMDVI - one per machine              */
+    MemoryRegion root;          /* AMDVI Root memory map region */
+    IOMMUMemoryRegion iommu;    /* Device's address translation region  */
+    MemoryRegion iommu_nodma;   /* Alias of shared nodma memory region  */
+    MemoryRegion iommu_ir;      /* Device's interrupt remapping region  */
+    AddressSpace as;            /* device's corresponding address space */
+};
 #endif
