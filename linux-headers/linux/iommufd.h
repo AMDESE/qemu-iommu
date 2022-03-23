@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_VIOMMU_COMMAND = 0x95,
 };
 
 /**
@@ -306,6 +307,9 @@ struct iommu_ioas_unmap {
  *    iommu mappings. Value 0 disables combining, everything is mapped to
  *    PAGE_SIZE. This can be useful for benchmarking.  This is a per-IOAS
  *    option, the object_id must be the IOAS ID.
+ * @IOMMU_KEY_VAL_OPTION_VIOMMU:
+ *    Specifies key-value option for vIOMMU object. The caller must specify
+ *    vIOMMU ID for object_id. The allowed ops are set and get.
  */
 enum iommufd_option {
 	IOMMU_OPTION_RLIMIT_MODE = 0,
@@ -1056,20 +1060,14 @@ struct iommu_viommu_tegra241_cmdqv {
 
 /**
  * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
- * @iommu_devid: Host IOMMU PCI device ID
- * @out_gid: (out) Guest ID
- * @viommu_devid: Guest vIOMMU PCI device ID
- * @trans_devid: GPA->GVA translation device ID (host)
  * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ * @kvmfd: KVM FD handler
  * @reserved: Must be zero
  */
 struct iommu_viommu_amd {
-	__u32 iommu_devid;
-	__u32 out_gid;
-	__u32 viommu_devid;
-	__u32 trans_devid;
 	__aligned_u64 out_vfmmio_mmap_offset;
-	__u32 reserved; /* MUST BE LAST */
+	__u32 kvmfd;
+	__u32 reserved; /* must be last */
 };
 
 /**
@@ -1108,6 +1106,39 @@ struct iommu_viommu_alloc {
 	__aligned_u64 data_uptr;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+/**
+ * enum viommu_command_ops - viommu command operations
+ * @IOMMU_VIOMMU_COMMAND_OP_SET: Set the command's data
+ * @IOMMU_VIOMMU_COMMAND_OP_GET: Get the command's data
+ */
+enum viommu_command_ops {
+	IOMMU_VIOMMU_COMMAND_OP_SET = 0,
+	IOMMU_VIOMMU_COMMAND_OP_GET = 1,
+};
+
+/**
+ * struct iommu_viommu_command - iommu viommu command multiplexer
+ * @size: sizeof(struct iommu_viommu_command)
+ * @op: One of enum viommu_command_ops
+ * @key: Command key to match with the value
+ * @object_id: ID of the vIOMMU if required
+ * @__reserved: Must be 0
+ * @val64: Command data to set or data returned on get
+ *
+ * This multiplexor allows controlling commands on vIOMMU.
+ * IOMMU_VIOMMU_COMMAND_OP_SET will load a command and
+ * IOMMU_VIOMMU_COMMAND_OP_GET will return the current value.
+ */
+struct iommu_viommu_command {
+	__u32 size;
+	__u16 op;
+	__u16 key;
+	__u32 object_id;
+	__u32 __reserved;
+	__aligned_u64 val64;
+};
+#define IOMMU_VIOMMU_COMMAND _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_COMMAND)
 
 /**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
