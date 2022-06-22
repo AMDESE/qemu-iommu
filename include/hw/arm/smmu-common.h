@@ -22,6 +22,9 @@
 #include "hw/sysbus.h"
 #include "hw/pci/pci.h"
 #include "qom/object.h"
+#include "system/iommufd.h"
+
+#include <linux/iommufd.h>
 
 #define SMMU_PCI_BUS_MAX                    256
 #define SMMU_PCI_DEVFN_MAX                  256
@@ -118,11 +121,30 @@ typedef struct SMMUTransCfg {
     struct SMMUS2Cfg s2cfg;
 } SMMUTransCfg;
 
+typedef struct SMMUS2Hwpt {
+    IOMMUFDBackend *iommufd;
+    uint32_t hwpt_id;
+    uint32_t ioas_id;
+} SMMUS2Hwpt;
+
+typedef struct SMMUViommu {
+    void *smmu;
+    IOMMUFDBackend *iommufd;
+    IOMMUFDViommu *core;
+    SMMUS2Hwpt *s2_hwpt;
+    uint32_t bypass_hwpt_id;
+    uint32_t abort_hwpt_id;
+    QLIST_HEAD(, SMMUDevice) device_list;
+    QLIST_ENTRY(SMMUViommu) next;
+} SMMUViommu;
+
 typedef struct SMMUDevice {
     void               *smmu;
     PCIBus             *bus;
     int                devfn;
     IOMMUMemoryRegion  iommu;
+    HostIOMMUDeviceIOMMUFD *idev;
+    SMMUViommu         *viommu;
     AddressSpace       as;
     uint32_t           cfg_cache_hits;
     uint32_t           cfg_cache_misses;
@@ -155,6 +177,7 @@ struct SMMUState {
 
     /* Nested SMMU */
     bool nested;
+    SMMUViommu *viommu;
 
     GHashTable *smmu_pcibus_by_busptr;
     GHashTable *configs; /* cache for configuration data */
