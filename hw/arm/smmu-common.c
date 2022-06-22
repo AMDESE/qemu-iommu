@@ -964,6 +964,7 @@ static const Property smmu_dev_properties[] = {
     DEFINE_PROP_UINT8("bus_num", SMMUState, bus_num, 0),
     DEFINE_PROP_LINK("primary-bus", SMMUState, primary_bus,
                      TYPE_PCI_BUS, PCIBus *),
+    DEFINE_PROP_BOOL("nested", SMMUState, nested, false),
 };
 
 static void smmu_base_class_init(ObjectClass *klass, void *data)
