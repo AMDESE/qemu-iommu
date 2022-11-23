@@ -32,6 +32,7 @@
 #include "system/system.h"
 #include "hw/vfio/vfio-container-base.h"
 #include "system/host_iommu_device.h"
+#include "sysemu/iommufd_device.h"
 #include "system/iommufd.h"
 
 #define VFIO_MSG_PREFIX "vfio %s: "
@@ -150,6 +151,7 @@ typedef struct VFIODevice {
     IOMMUFDBackend *iommufd;
     VFIOIOASHwpt *hwpt;
     QLIST_ENTRY(VFIODevice) hwpt_next;
+    IOMMUFDDevice idev;
 } VFIODevice;
 
 struct VFIODeviceOps {

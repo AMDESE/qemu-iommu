@@ -3284,7 +3284,7 @@ static void vfio_exitfn(PCIDevice *pdev)
     vfio_teardown_msi(vdev);
     vfio_pci_disable_rp_atomics(vdev);
     vfio_bars_exit(vdev);
-    vfio_migration_exit(vbasedev);
+    pci_device_unset_iommu_device(pdev);
     if (!vbasedev->mdev) {
         pci_device_unset_iommu_device(pdev);
     }
