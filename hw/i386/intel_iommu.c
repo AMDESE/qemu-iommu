@@ -4778,6 +4778,7 @@ static bool vtd_decide_config(IntelIOMMUState *s, Error **errp)
     return true;
 }
 
+#if 0
 static int vtd_machine_done_notify_one(Object *child, void *unused)
 {
     IntelIOMMUState *iommu = INTEL_IOMMU_DEVICE(x86_iommu_get_default());
@@ -4796,9 +4797,67 @@ static int vtd_machine_done_notify_one(Object *child, void *unused)
 
 static void vtd_machine_done_hook(Notifier *notifier, void *unused)
 {
+    IntelIOMMUState *iommu = INTEL_IOMMU_DEVICE(x86_iommu_get_default());
+
+    vtd_iommu_lock(iommu);
+    iommu->cap = iommu->host_cap;
+    iommu->ecap = iommu->host_ecap;
+    iommu->cap_finalized = true;
+
+    vtd_setup_capability_reg(iommu);
+    vtd_iommu_unlock(iommu);
+
     object_child_foreach_recursive(object_get_root(),
                                    vtd_machine_done_notify_one, NULL);
 }
+#else
+static int vtd_machine_done_notify_one(Object *child, void *unused)
+{
+    IntelIOMMUState *iommu;
+    X86IOMMUState *s;
+
+    QLIST_FOREACH(s, x86_iommu_get_iommu_list_head(), next) {
+	if (object_dynamic_cast(OBJECT(s), TYPE_INTEL_IOMMU_DEVICE)) {
+            iommu = INTEL_IOMMU_DEVICE(s);
+
+            /*
+             * We hard-coded here because vfio-pci is the only special case
+             * here.  Let's be more elegant in the future when we can, but so
+             * far there seems to be no better way.
+             */
+            if (object_dynamic_cast(child, "vfio-pci") && !iommu->caching_mode) {
+                vtd_panic_require_caching_mode();
+            }
+        }
+    }
+
+    return 0;
+}
+
+static void vtd_machine_done_hook(Notifier *notifier, void *unused)
+{
+    IntelIOMMUState *iommu;
+    X86IOMMUState *s;
+
+    QLIST_FOREACH(s, x86_iommu_get_iommu_list_head(), next) {
+	if (object_dynamic_cast(OBJECT(s), TYPE_INTEL_IOMMU_DEVICE)) {
+            iommu = INTEL_IOMMU_DEVICE(s);
+
+            vtd_iommu_lock(iommu);
+//SURAVEE: HACK
+//            iommu->cap = iommu->host_cap;
+//            iommu->ecap = iommu->host_ecap;
+//            iommu->cap_finalized = true;
+//
+ //           vtd_setup_capability_reg(iommu);
+            vtd_iommu_unlock(iommu);
+
+            object_child_foreach_recursive(object_get_root(),
+                                           vtd_machine_done_notify_one, NULL);
+        }
+    }
+}
+#endif
 
 static Notifier vtd_machine_done_notify = {
     .notify = vtd_machine_done_hook,
