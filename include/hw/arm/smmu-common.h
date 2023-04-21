@@ -138,6 +138,12 @@ typedef struct SMMUViommu {
     QLIST_ENTRY(SMMUViommu) next;
 } SMMUViommu;
 
+typedef struct SMMUVdev {
+    SMMUViommu *vsmmu;
+    IOMMUFDVdev *core;
+    uint32_t sid;
+}SMMUVdev;
+
 typedef struct SMMUS1Hwpt {
     void *smmu;
     IOMMUFDBackend *iommufd;
@@ -154,6 +160,7 @@ typedef struct SMMUDevice {
     IOMMUMemoryRegion  iommu;
     HostIOMMUDeviceIOMMUFD *idev;
     SMMUViommu         *viommu;
+    SMMUVdev           *vdev;
     SMMUS1Hwpt         *s1_hwpt;
     AddressSpace       as;
     AddressSpace       as_sysmem;
