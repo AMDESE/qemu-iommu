@@ -1431,13 +1431,15 @@ static void create_smmu(const VirtMachineState *vms,
     DeviceState *dev;
     MachineState *ms = MACHINE(vms);
 
-    if (vms->iommu != VIRT_IOMMU_SMMUV3 || !vms->iommu_phandle) {
+    if (!virt_has_smmuv3(vms) || !vms->iommu_phandle) {
         return;
     }
 
     dev = qdev_new(TYPE_ARM_SMMUV3);
 
-    if (!vmc->no_nested_smmu) {
+    if (vms->iommu == VIRT_IOMMU_NESTED_SMMUV3) {
+        object_property_set_bool(OBJECT(dev), "nested", true, &error_abort);
+    } else if (!vmc->no_nested_smmu) {
         object_property_set_str(OBJECT(dev), "stage", "nested", &error_fatal);
     }
     object_property_set_link(OBJECT(dev), "primary-bus", OBJECT(bus),
@@ -1616,6 +1618,7 @@ static void create_pcie(VirtMachineState *vms)
 
         switch (vms->iommu) {
         case VIRT_IOMMU_SMMUV3:
+        case VIRT_IOMMU_NESTED_SMMUV3:
             create_smmu(vms, vms->bus);
             qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
                                    0x0, vms->iommu_phandle, 0x0, 0x10000);
@@ -2768,6 +2771,8 @@ static char *virt_get_iommu(Object *obj, Error **errp)
         return g_strdup("none");
     case VIRT_IOMMU_SMMUV3:
         return g_strdup("smmuv3");
+    case VIRT_IOMMU_NESTED_SMMUV3:
+        return g_strdup("nested-smmuv3");
     default:
         g_assert_not_reached();
     }
@@ -2779,6 +2784,8 @@ static void virt_set_iommu(Object *obj, const char *value, Error **errp)
 
     if (!strcmp(value, "smmuv3")) {
         vms->iommu = VIRT_IOMMU_SMMUV3;
+    } else if (!strcmp(value, "nested-smmuv3")) {
+        vms->iommu = VIRT_IOMMU_NESTED_SMMUV3;
     } else if (!strcmp(value, "none")) {
         vms->iommu = VIRT_IOMMU_NONE;
     } else {
