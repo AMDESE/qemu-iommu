@@ -49,8 +49,8 @@ struct PXBBus {
     char bus_path[8];
 };
 
-#define TYPE_PXB_PCIE_DEV "pxb-pcie"
-OBJECT_DECLARE_SIMPLE_TYPE(PXBPCIEDev, PXB_PCIE_DEV)
+//#define TYPE_PXB_PCIE_DEV "pxb-pcie"
+//OBJECT_DECLARE_SIMPLE_TYPE(PXBPCIEDev, PXB_PCIE_DEV)
 
 static GList *pxb_dev_list;
 
@@ -455,6 +455,10 @@ static const TypeInfo pxb_dev_info = {
     },
 };
 
+static const Property pxb_pcie_dev_properties[] = {
+    DEFINE_PROP_UINT32("parent-iommu-id1", PXBPCIEDev, parent_iommu_id1, 0),
+};
+
 static void pxb_pcie_dev_realize(PCIDevice *dev, Error **errp)
 {
     if (!pci_bus_is_express(pci_get_bus(dev))) {
@@ -477,6 +481,7 @@ static void pxb_pcie_dev_class_init(ObjectClass *klass, void *data)
     k->class_id = PCI_CLASS_BRIDGE_HOST;
 
     dc->desc = "PCI Express Expander Bridge";
+    device_class_set_props(dc, pxb_pcie_dev_properties);
     dc->hotpluggable = false;
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }

@@ -177,6 +177,9 @@ struct PCIDevice {
      * realizing the device.
      */
     uint32_t max_bounce_buffer_size;
+
+    /* Parent IOMMU for this device */
+    uint32_t parent_iommu_id;
 };
 
 static inline int pci_intx(PCIDevice *pci_dev)
