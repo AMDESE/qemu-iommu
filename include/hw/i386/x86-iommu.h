@@ -37,6 +37,7 @@ struct X86IOMMUClass {
     SysBusDeviceClass parent;
     /* Intel/AMD specific realize() hook */
     DeviceRealize realize;
+    DeviceUnrealize unrealize;
     /* MSI-based interrupt remapping */
     int (*int_remap)(X86IOMMUState *iommu, MSIMessage *src,
                      MSIMessage *dst, uint16_t sid);

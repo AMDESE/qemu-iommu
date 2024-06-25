@@ -129,6 +129,16 @@ static void x86_iommu_realize(DeviceState *dev, Error **errp)
     }
 }
 
+static void x86_iommu_unrealize(DeviceState *dev)
+{
+    X86IOMMUClass *x86_class = X86_IOMMU_DEVICE_GET_CLASS(dev);
+
+fprintf(stderr, "DEBUG: %s: %u\n", __func__, __LINE__);
+    if (x86_class->unrealize) {
+        x86_class->unrealize(dev);
+    }
+}
+
 static const Property x86_iommu_properties[] = {
     DEFINE_PROP_ON_OFF_AUTO("intremap", X86IOMMUState,
                             intr_supported, ON_OFF_AUTO_AUTO),
@@ -141,6 +151,7 @@ static void x86_iommu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = x86_iommu_realize;
+    dc->unrealize = x86_iommu_unrealize;
     device_class_set_props(dc, x86_iommu_properties);
 }
 
