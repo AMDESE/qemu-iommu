@@ -1378,6 +1378,8 @@ static void pc_memory_unplug(HotplugHandler *hotplug_dev,
     error_propagate(errp, local_err);
 }
 
+//SURAVEE
+#if 0
 static void pc_hv_balloon_pre_plug(HotplugHandler *hotplug_dev,
                                    DeviceState *dev, Error **errp)
 {
@@ -1385,6 +1387,7 @@ static void pc_hv_balloon_pre_plug(HotplugHandler *hotplug_dev,
     g_assert(!dev->hotplugged);
     memory_device_pre_plug(MEMORY_DEVICE(dev), MACHINE(hotplug_dev), errp);
 }
+#endif
 
 static void pc_hv_balloon_plug(HotplugHandler *hotplug_dev,
                                DeviceState *dev, Error **errp)
@@ -1413,6 +1416,8 @@ static void pc_machine_device_pre_plug_cb(HotplugHandler *hotplug_dev,
         g_free(resv_prop_str);
     }
 
+//SURAVEE
+#if 0
     if (object_dynamic_cast(OBJECT(dev), TYPE_X86_IOMMU_DEVICE) ||
         object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_IOMMU_PCI)) {
         PCMachineState *pcms = PC_MACHINE(hotplug_dev);
@@ -1426,6 +1431,7 @@ static void pc_machine_device_pre_plug_cb(HotplugHandler *hotplug_dev,
     } else if (object_dynamic_cast(OBJECT(dev), TYPE_HV_BALLOON)) {
         pc_hv_balloon_pre_plug(hotplug_dev, dev, errp);
     }
+#endif
 }
 
 static void pc_machine_device_plug_cb(HotplugHandler *hotplug_dev,
