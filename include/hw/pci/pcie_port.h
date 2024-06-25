@@ -96,4 +96,19 @@ struct PCIERootPortClass {
     int ssid;
 };
 
+struct GenPCIERootPort {
+    /*< private >*/
+    PCIESlot parent_obj;
+    /*< public >*/
+
+    bool migrate_msix;
+
+    /* additional resources to reserve */
+    PCIResReserve res_reserve;
+    uint32_t parent_iommu_id;
+};
+
+#define TYPE_GEN_PCIE_ROOT_PORT                "pcie-root-port"
+OBJECT_DECLARE_SIMPLE_TYPE(GenPCIERootPort, GEN_PCIE_ROOT_PORT)
+
 #endif /* QEMU_PCIE_PORT_H */

@@ -99,9 +99,13 @@ typedef struct PXBDev {
     bool bypass_iommu;
 } PXBDev;
 
+#define TYPE_PXB_PCIE_DEV "pxb-pcie"
+OBJECT_DECLARE_SIMPLE_TYPE(PXBPCIEDev, PXB_PCIE_DEV)
+
 typedef struct PXBPCIEDev {
     /*< private >*/
     PXBDev parent_obj;
+    uint32_t parent_iommu_id1;
 } PXBPCIEDev;
 
 #define TYPE_PXB_CXL_BUS "pxb-cxl-bus"

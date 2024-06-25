@@ -20,8 +20,8 @@
 #include "migration/vmstate.h"
 #include "qom/object.h"
 
-#define TYPE_GEN_PCIE_ROOT_PORT                "pcie-root-port"
-OBJECT_DECLARE_SIMPLE_TYPE(GenPCIERootPort, GEN_PCIE_ROOT_PORT)
+//#define TYPE_GEN_PCIE_ROOT_PORT                "pcie-root-port"
+//OBJECT_DECLARE_SIMPLE_TYPE(GenPCIERootPort, GEN_PCIE_ROOT_PORT)
 
 #define GEN_PCIE_ROOT_PORT_AER_OFFSET           0x100
 #define GEN_PCIE_ROOT_PORT_ACS_OFFSET \
@@ -30,16 +30,16 @@ OBJECT_DECLARE_SIMPLE_TYPE(GenPCIERootPort, GEN_PCIE_ROOT_PORT)
 #define GEN_PCIE_ROOT_PORT_MSIX_NR_VECTOR       1
 #define GEN_PCIE_ROOT_DEFAULT_IO_RANGE          4096
 
-struct GenPCIERootPort {
-    /*< private >*/
-    PCIESlot parent_obj;
-    /*< public >*/
-
-    bool migrate_msix;
-
-    /* additional resources to reserve */
-    PCIResReserve res_reserve;
-};
+//struct GenPCIERootPort {
+//    /*< private >*/
+//    PCIESlot parent_obj;
+//    /*< public >*/
+//
+//    bool migrate_msix;
+//
+//    /* additional resources to reserve */
+//    PCIResReserve res_reserve;
+//};
 
 static uint8_t gen_rp_aer_vector(const PCIDevice *d)
 {
@@ -145,6 +145,7 @@ static const Property gen_rp_props[] = {
                                 speed, PCIE_LINK_SPEED_16),
     DEFINE_PROP_PCIE_LINK_WIDTH("x-width", PCIESlot,
                                 width, PCIE_LINK_WIDTH_32),
+    DEFINE_PROP_UINT32("parent-iommu-id", GenPCIERootPort, parent_iommu_id, 0),
 };
 
 static void gen_rp_dev_class_init(ObjectClass *klass, void *data)
