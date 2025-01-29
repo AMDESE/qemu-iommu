@@ -2008,6 +2008,8 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     acpi_table_end(linker, &table);
 }
 
+//SURAVEE: Ignore DMAR stuff
+#if 0
 /*
  * Insert DMAR scope for PCI bridges and endpoint devices
  */
@@ -2137,6 +2139,7 @@ build_dmar_q35(GArray *table_data, BIOSLinker *linker, const char *oem_id,
 
     acpi_table_end(linker, &table);
 }
+#endif
 
 /*
  * Windows ACPI Emulated Devices Table
@@ -2170,6 +2173,8 @@ build_waet(GArray *table_data, BIOSLinker *linker, const char *oem_id,
  */
 #define IOAPIC_SB_DEVID   (uint64_t)PCI_BUILD_BDF(0, PCI_DEVFN(0x14, 0))
 
+//SURAVEE: Ignore emulate AMD IOMMU stuff
+#if 0
 /*
  * Insert IVHD entry for device and recurse, insert alias, or insert range as
  * necessary for the PCI topology.
@@ -2244,24 +2249,122 @@ insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
         }
     }
 }
+#endif
+
+struct ivhd_blob {
+    uint32_t iommu_id;
+    uint32_t last_bus_nr;
+    GArray *blob;
+};
+
+static void
+insert_viommu_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
+{
+    struct ivhd_blob *ivhd = opaque;
+    GArray *table_data = ivhd->blob;
+    uint32_t entry;
+
+fprintf(stderr, "DEBUG: %s: %u: bus=%s(%#x), bus->parent_dev=%s, dev=%s, iommu_id=%#x, parent_iommu_id=%#x\n",
+	__func__, __LINE__, bus->qbus.name, pci_bus_num(bus),
+	bus->parent_dev? bus->parent_dev->name: "NULL", dev->name,
+	ivhd->iommu_id, dev->parent_iommu_id);
+
+    if (object_dynamic_cast(OBJECT(dev), TYPE_PCI_BRIDGE)) {
+        PCIBus *sec_bus = pci_bridge_get_sec_bus(PCI_BRIDGE(dev));
+        uint8_t sec = pci_bus_num(sec_bus);
+        uint8_t sub = dev->config[PCI_SUBORDINATE_BUS];
+
+        if (pci_bus_is_express(sec_bus)) {
+            fprintf(stderr, "DEBUG: %s: %u: sec_bus=%s (sec:sub=%#x:%#x)\n",
+		__func__, __LINE__, sec_bus->qbus.name, sec, sub);
+
+            /*
+             * Walk the bus if there are subordinates, otherwise use a range
+             * to cover an entire leaf bus.  We could potentially also use a
+             * range for traversed buses, but we'd need to take care not to
+             * create both Select and Range entries covering the same device.
+             * This is easier and potentially more compact.
+             *
+             * An example bare metal system seems to use Select entries for
+             * root ports without a slot (ie. built-ins) and Range entries
+             * when there is a slot.  The same system also only hard-codes
+             * the alias range for an onboard PCIe-to-PCI bridge, apparently
+             * making no effort to support nested bridges.  We attempt to
+             * be more thorough here.
+             */
+            if (sec == sub) { /* leaf bus */
+		if (bus->parent_dev &&
+                    object_dynamic_cast(OBJECT(bus->parent_dev), "pxb-pcie")) {
+                    PXBPCIEDev *pdev = PXB_PCIE_DEV(bus->parent_dev);
+
+                    if (ivhd->iommu_id != pdev->parent_iommu_id1)
+                        return;
+
+fprintf(stderr, "DEBUG: %s: %u: ivhd->iommu_id=%#x, bus->parent_dev->parent_iommu_id1=%#x\n",
+	__func__, __LINE__, ivhd->iommu_id, pdev->parent_iommu_id1);
+
+                    /* "Start of Range" IVHD entry, type 0x3 */
+                    entry = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0)) << 8 | 0x3;
+                    build_append_int_noprefix(table_data, entry, 4);
+                    /* "End of Range" IVHD entry, type 0x4 */
+                    //entry = PCI_BUILD_BDF(sub, PCI_DEVFN(31, 7)) << 8 | 0x4;
+                    entry = PCI_BUILD_BDF(ivhd->last_bus_nr, PCI_DEVFN(31, 7)) << 8 | 0x4;
+                    build_append_int_noprefix(table_data, entry, 4);
+                }
+            } else {
+                pci_for_each_device(sec_bus, sec, insert_viommu_ivhd, table_data);
+            }
+        } else {
+            /*
+             * If the secondary bus is conventional, then we need to create an
+             * Alias range for everything downstream.  The range covers the
+             * first devfn on the secondary bus to the last devfn on the
+             * subordinate bus.  The alias target depends on legacy versus
+             * express bridges, just as in pci_device_iommu_address_space().
+             * DeviceIDa vs DeviceIDb as per the AMD IOMMU spec.
+             */
+            uint16_t dev_id_a, dev_id_b;
+
+            dev_id_a = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
+
+            if (pci_is_express(dev) &&
+                pcie_cap_get_type(dev) == PCI_EXP_TYPE_PCI_BRIDGE) {
+                dev_id_b = dev_id_a;
+            } else {
+                dev_id_b = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn);
+            }
+
+            /* "Alias Start of Range" IVHD entry, type 0x43, 8 bytes */
+            build_append_int_noprefix(table_data, dev_id_a << 8 | 0x43, 4);
+            build_append_int_noprefix(table_data, dev_id_b << 8 | 0x0, 4);
+
+            /* "End of Range" IVHD entry, type 0x4 */
+            entry = PCI_BUILD_BDF(sub, PCI_DEVFN(31, 7)) << 8 | 0x4;
+            build_append_int_noprefix(table_data, entry, 4);
+        }
+    }
+}
 
 /* For all PCI host bridges, walk and insert IVHD entries */
 static int
 ivrs_host_bridges(Object *obj, void *opaque)
 {
-    GArray *ivhd_blob = opaque;
+//    GArray *ivhd_blob = opaque;
 
     if (object_dynamic_cast(obj, TYPE_PCI_HOST_BRIDGE)) {
         PCIBus *bus = PCI_HOST_BRIDGE(obj)->bus;
 
         if (bus && !pci_bus_bypass_iommu(bus)) {
-            pci_for_each_device_under_bus(bus, insert_ivhd, ivhd_blob);
+//            pci_for_each_device_under_bus(bus, insert_ivhd, ivhd_blob);
+            pci_for_each_device(bus, pci_bus_num(bus), insert_viommu_ivhd, opaque);
         }
     }
 
     return 0;
 }
 
+//SURAVEE: Replace with newer version
+#if 0
 static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
@@ -2392,6 +2495,102 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     g_array_free(ivhd_blob, TRUE);
     acpi_table_end(linker, &table);
 }
+#else
+static void
+build_amd_iommu(GArray *table_data, AMDVIState *s,
+                uint64_t efr, uint64_t efr2, uint32_t attr)
+{
+    struct ivhd_blob ivhd;
+    int ivhd_table_len = 40;
+    uint16_t bdf = PCI_BUILD_BDF((s->iommu.host.bus),
+				PCI_DEVFN(s->iommu.host.slot,
+					  s->iommu.host.function));
+
+fprintf(stderr, "DEBUG0: %s: bdf=%#x, gid=%u, EFR:EFR2=%#08lx:%08lx\n",
+	__func__, bdf, s->gid, efr, efr2);
+
+    ivhd.iommu_id = s->iommu.id;
+    ivhd.last_bus_nr = s->last_bus_nr;
+    ivhd.blob = g_array_new(false, true, 1);
+
+    /* IVHD definition - type 11h */
+    build_append_int_noprefix(table_data, 0x11, 1);
+    /* virtualization flags */
+    build_append_int_noprefix(table_data,
+                             (1UL << 0) | /* HtTunEn      */
+                             (1UL << 4) , /* iotblSup     */
+                             1);
+
+    /*
+     * A PCI bus walk, for each PCI host bridge, is necessary to create a
+     * complete set of IVHD entries.  Do this into a separate blob so that we
+     * can calculate the total IVRS table length here and then append the new
+     * blob further below.  Fall back to an entry covering all devices, which
+     * is sufficient when no aliases are present.
+     */
+    object_child_foreach_recursive(object_get_root(),
+                                   ivrs_host_bridges, &ivhd);
+
+    if (!ivhd.blob->len) {
+        /*
+         *   Type 1 device entry reporting all devices
+         *   These are 4-byte device entries currently reporting the range of
+         *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
+         */
+        build_append_int_noprefix(ivhd.blob, 0x0000001, 4);
+    }
+
+    ivhd_table_len += ivhd.blob->len;
+
+    /*
+     * When interrupt remapping is supported, we add a special IVHD device
+     * for type IO-APIC.
+     */
+    if (x86_iommu_ir_supported(&s->iommu)) {
+        ivhd_table_len += 8;
+    }
+
+    /* IVHD length */
+    build_append_int_noprefix(table_data, ivhd_table_len, 2);
+    /* DeviceID */
+    build_append_int_noprefix(table_data,
+                              object_property_get_int(OBJECT(&s->pci), "addr",
+                                                      &error_abort), 2);
+    /* Capability offset */
+    build_append_int_noprefix(table_data, s->pci.capab_offset, 2);
+    /* IOMMU base address */
+    build_append_int_noprefix(table_data, s->mr_mmio.addr, 8);
+    /* PCI Segment Group */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU info */
+    build_append_int_noprefix(table_data, 0, 2);
+    /* IOMMU Attribute */
+    build_append_int_noprefix(table_data, attr, 4);
+    /* IOMMU EFR */
+    build_append_int_noprefix(table_data, efr, 8);
+    /* IOMMU EFR2 */
+    build_append_int_noprefix(table_data, efr2, 8);
+
+    /* IVHD entries as found above */
+    g_array_append_vals(table_data, ivhd.blob->data, ivhd.blob->len);
+    g_array_free(ivhd.blob, TRUE);
+
+    /*
+     * Add a special IVHD device type.
+     * Refer to spec - Table 95: IVHD device entry type codes
+     *
+     * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
+     * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
+     */
+    if (x86_iommu_ir_supported(&s->iommu)) {
+        build_append_int_noprefix(table_data,
+                                 (0x1ull << 56) |           /* type IOAPIC */
+                                 (IOAPIC_SB_DEVID << 40) |  /* IOAPIC devid */
+                                 0x48,                      /* special device */
+                                 8);
+    }
+}
+#endif
 
 typedef
 struct AcpiBuildState {
@@ -2431,11 +2630,63 @@ static bool acpi_get_mcfg(AcpiMcfgInfo *mcfg)
 }
 
 static
+void build_ivrs(GArray *table_data, BIOSLinker *linker, const char *oem_id,
+                const char *oem_table_id)
+{
+    X86IOMMUState *iommu;
+    AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
+                        .oem_table_id = oem_table_id };
+    acpi_table_begin(&table, table_data);
+
+    /* IVinfo - IO virtualization information common to all
+     * IOMMU units in a system
+     */
+    build_append_int_noprefix(table_data,
+                              40UL << 8 |  /* PASize */
+                              1UL,         /* EFRSup */
+                              4);
+    /* reserved */
+    build_append_int_noprefix(table_data, 0, 8);
+
+    QLIST_FOREACH(iommu, x86_iommu_get_iommu_list_head(), next) {
+        AMDVIState *s;
+        uint64_t efr, efr2;
+        uint32_t attr = 0;
+
+        if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
+            s = AMD_IOMMU_DEVICE(iommu);
+
+            efr = (1UL << 1) |  /* PPRSup */
+                  (1UL << 2) |  /* XTSup */
+                  (1UL << 4) |  /* GTSup */
+                  (2UL << 10) | /* HATSup */
+                  (2UL << 12) ; /* GATSup*/
+            efr2 = 0;
+        } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
+            s = AMD_VIOMMU_DEVICE(iommu);
+
+            efr = s->hwinfo.efr;
+            efr2 = s->hwinfo.efr2;
+            attr = 0x1;	/* HATDis */
+        } else { /* Fix compilation error */
+            continue;
+        }
+
+	fprintf(stderr, "DEBUG %s: efr 0x%lx efr2 0x%lx attr 0x%x\n",
+                __func__, efr, efr2, attr);
+
+        build_amd_iommu(table_data, s, efr, efr2, attr);
+    }
+
+    acpi_table_end(linker, &table);
+}
+
+static
 void acpi_build(AcpiBuildTables *tables, MachineState *machine)
 {
     PCMachineState *pcms = PC_MACHINE(machine);
     X86MachineState *x86ms = X86_MACHINE(machine);
-    DeviceState *iommu = pcms->iommu;
+//    DeviceState *iommu = pcms->iommu;
     GArray *table_offsets;
     unsigned facs, dsdt, rsdt;
     AcpiPmInfo pm;
@@ -2562,6 +2813,8 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
         build_mcfg(tables_blob, tables->linker, &mcfg, x86ms->oem_id,
                    x86ms->oem_table_id);
     }
+//SURAVEE: HACK
+#if 0
     if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
         acpi_add_table(table_offsets, tables_blob);
         build_amd_iommu(tables_blob, tables->linker, x86ms->oem_id,
@@ -2581,6 +2834,12 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
         build_viot(machine, tables_blob, tables->linker, pci_get_bdf(pdev),
                    x86ms->oem_id, x86ms->oem_table_id);
     }
+#else
+    if (!QLIST_EMPTY(x86_iommu_get_iommu_list_head())) {
+        acpi_add_table(table_offsets, tables_blob);
+        build_ivrs(tables_blob, tables->linker, x86ms->oem_id, x86ms->oem_table_id);
+    }
+#endif
     if (machine->nvdimms_state->is_enabled) {
         nvdimm_build_acpi(table_offsets, tables_blob, tables->linker,
                           machine->nvdimms_state, machine->ram_slots,
