@@ -353,7 +353,7 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
     if (vbasedev->tee_io) {
         iommufd->viommu = iommufd_backend_alloc_viommu(iommufd, vbasedev->devid,
                                                        IOMMU_VIOMMU_TYPE_AMD_TSM,
-                                                       hwpt_id);
+                                                       hwpt_id, 0, NULL);
 
         if (!iommufd->viommu) {
             error_setg(errp, "failed to allocate a viommu");
