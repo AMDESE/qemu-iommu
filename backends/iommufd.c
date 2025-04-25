@@ -307,10 +307,12 @@ bool iommufd_backend_get_device_info(IOMMUFDBackend *be, uint32_t devid,
                                      uint64_t *caps, Error **errp)
 {
     struct iommu_hw_info info = {
+        .flags = (*type) ? IOMMU_HW_INFO_FLAG_INPUT_TYPE : 0,
         .size = sizeof(info),
         .dev_id = devid,
         .data_len = len,
         .data_uptr = (uintptr_t)data,
+        .in_data_type = *type,
     };
 
     if (ioctl(be->fd, IOMMU_GET_HW_INFO, &info)) {
@@ -561,40 +563,43 @@ struct IOMMUFDVeventq *iommufd_viommu_alloc_eventq(IOMMUFDViommu *viommu,
     return veventq;
 }
 
-struct IOMMUFDVcmdq *iommufd_viommu_alloc_cmdq(IOMMUFDViommu *viommu,
-                                               uint32_t data_type,
-                                               uint32_t len, void *data_ptr)
+struct IOMMUFDHWqueue *iommufd_viommu_alloc_hw_queue(IOMMUFDViommu *viommu,
+                                                     uint32_t data_type,
+                                                     uint32_t index,
+                                                     uint64_t addr,
+                                                     uint64_t length)
 {
     int ret, fd = viommu->iommufd->fd;
-    struct IOMMUFDVcmdq *vcmdq = g_malloc(sizeof(*vcmdq));
-    struct iommu_vcmdq_alloc alloc_vcmdq = {
-        .size = sizeof(alloc_vcmdq),
+    struct IOMMUFDHWqueue *hw_queue = g_malloc(sizeof(*hw_queue));
+    struct iommu_hw_queue_alloc alloc_hw_queue = {
+        .size = sizeof(alloc_hw_queue),
         .flags = 0,
         .viommu_id = viommu->viommu_id,
         .type = data_type,
-        .data_len = len,
-        .data_uptr = (uint64_t)data_ptr,
+        .index = index,
+        .nesting_parent_iova = addr,
+        .length = length,
     };
 
-    if (!vcmdq) {
-        error_report("failed to allocate vcmdq object");
+    if (!hw_queue) {
+        error_report("failed to allocate hw_queue object");
         return NULL;
     }
 
-    ret = ioctl(fd, IOMMU_VCMDQ_ALLOC, &alloc_vcmdq);
+    ret = ioctl(fd, IOMMU_HW_QUEUE_ALLOC, &alloc_hw_queue);
 
-    trace_iommufd_viommu_alloc_cmdq(fd, viommu->viommu_id, data_type,
-                                    len, (uint64_t)data_ptr,
-                                    alloc_vcmdq.out_vcmdq_id, ret);
+    trace_iommufd_viommu_alloc_hw_queue(fd, viommu->viommu_id, data_type, index,
+                                        addr, length,
+                                        alloc_hw_queue.out_hw_queue_id, ret);
     if (ret) {
-        error_report("IOMMU_VQUEUE_ALLOC failed: %s", strerror(errno));
-        g_free(vcmdq);
+        error_report("IOMMU_HW_QUEUE_ALLOC failed: %s", strerror(errno));
+        g_free(hw_queue);
         return NULL;
     }
 
-    vcmdq->vcmdq_id = alloc_vcmdq.out_vcmdq_id;
-    vcmdq->viommu = viommu;
-    return vcmdq;
+    hw_queue->hw_queue_id = alloc_hw_queue.out_hw_queue_id;
+    hw_queue->viommu = viommu;
+    return hw_queue;
 }
 
 void *iommufd_viommu_get_shared_page(IOMMUFDViommu *viommu,

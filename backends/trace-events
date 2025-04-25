@@ -27,5 +27,5 @@ hostmem_memfd_set_memory_attributes(uint64_t start, uint64_t size, uint64_t attr
 iommufd_tsm_bind(int iommufd, uint32_t devid, int kvmfd) "iommufd=%d vdev=%x kvmfd=%d"
 iommufd_tsm_guest_request(int iommufd, uint32_t devid, uint32_t flags, uint32_t fw_err) "iommufd=%d vdev=%x flags=%x fw_err=%x"
 iommufd_viommu_alloc_eventq(int iommufd, uint32_t viommu_id, uint32_t type, uint32_t veventq_id, uint32_t veventq_fd, int ret) " iommufd=%d viommu_id=%u type=%u veventq_id=%u veventq_fd=%u (%d)"
-iommufd_viommu_alloc_cmdq(int iommufd, uint32_t viommu_id, uint32_t data_type, uint32_t len, uint64_t data_ptr, uint32_t vcmdq_id, int ret) " iommufd=%d viommu_id=%u data_type=%u len=%u data_ptr=0x%"PRIx64" vcmdq_id=%u (%d)"
+iommufd_viommu_alloc_hw_queue(int iommufd, uint32_t viommu_id, uint32_t vqueue_type, uint32_t index, uint64_t addr, uint64_t size, uint32_t vqueue_id, int ret) " iommufd=%d viommu_id=%u vqueue_type=%u index=%u addr=0x%"PRIx64" size=0x%"PRIx64" vqueue_id=%u (%d)"
 iommufd_viommu_get_shared_page(int iommufd, uint32_t viommu_id, uint32_t size, bool readonly) " iommufd=%d viommu_id=%u size=0x%x readonly=%d"

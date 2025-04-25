@@ -926,7 +926,7 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
 {
     VFIODevice *vdev = opaque;
     HostIOMMUDeviceCaps *caps = &hiod->caps;
-    enum iommu_hw_info_type type;
+    enum iommu_hw_info_type type = IOMMU_HW_INFO_TYPE_DEFAULT;
     union {
         struct iommu_hw_info_vtd vtd;
     } data;

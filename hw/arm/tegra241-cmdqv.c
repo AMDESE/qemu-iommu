@@ -37,7 +37,7 @@ struct Tegra241CMDQV {
     SysBusDevice parent_obj;
     DeviceState *smmu_dev;
     IOMMUFDViommu *viommu;
-    IOMMUFDVcmdq *vcmdq[128];
+    IOMMUFDHWqueue *vcmdq[128];
     IOMMUFDVeventq *veventq;
     QemuThread irq_thread_id;
     MemoryRegion mmio_cmdqv;
@@ -69,10 +69,18 @@ struct Tegra241CMDQV {
 
 static void cmdqv_init_regs(Tegra241CMDQV *s)
 {
+    SMMUState *bs = ARM_SMMU(s->smmu_dev);
     int i;
 
     s->config = V_CONFIG_RESET;
-    s->param = V_PARAM_RESET;
+    s->param = 0; //V_PARAM_RESET;
+    s->param = FIELD_DP32(s->param, PARAM, CMDQV_VER,
+                          bs->cmdqv_info.version);
+    s->param = FIELD_DP32(s->param, PARAM, CMDQV_NUM_CMDQ_LOG2,
+                          bs->cmdqv_info.log2vcmdqs);
+    s->param = FIELD_DP32(s->param, PARAM, CMDQV_NUM_SID_PER_VM_LOG2,
+                          bs->cmdqv_info.log2vsids);
+    error_report("%s: param=%x", __func__, s->param);
     s->status = R_STATUS_CMDQV_ENABLED_MASK;
     for (i = 0; i < 2; i++) {
         s->vi_err_map[i] = 0;
@@ -266,7 +274,7 @@ static int tegra241_cmdqv_init_vcmdq_page0(Tegra241CMDQV *s)
 
     s->vcmdq_page0 = mmap(NULL, VCMDQ_REG_PAGE_SIZE, PROT_READ | PROT_WRITE,
                           MAP_SHARED, s->viommu->iommufd->fd,
-                          bs->viommu->cmdqv_data.out_vintf_page0_pgoff);
+                          bs->viommu->cmdqv_data.out_vintf_mmap_offset);
     if (s->vcmdq_page0 == MAP_FAILED) {
         error_report("failed to mmap VCMDQ PAGE0");
         s->vcmdq_page0 = NULL;
@@ -400,25 +408,22 @@ static int tegra241_cmdqv_setup_vcmdq(Tegra241CMDQV *s, int index)
     SMMUState *bs = ARM_SMMU(s->smmu_dev);
     uint64_t base_mask = (uint64_t)R_VCMDQ0_BASE_L_ADDR_MASK |
                          (uint64_t)R_VCMDQ0_BASE_H_ADDR_MASK << 32;
-    struct iommu_vcmdq_tegra241_cmdqv data = {
-        .vcmdq_id = index,
-        .vcmdq_log2size = s->vcmdq_base[index] &
-                          R_VCMDQ0_BASE_L_LOG2SIZE_MASK,
-        .vcmdq_base = s->vcmdq_base[index] & base_mask,
-    };
-    IOMMUFDVcmdq *vcmdq = s->vcmdq[index];
+    uint64_t addr = s->vcmdq_base[index] & base_mask;
+    uint64_t shift = s->vcmdq_base[index] & R_VCMDQ0_BASE_L_LOG2SIZE_MASK;
+    uint64_t size = 1 << (shift + 4);
+    IOMMUFDHWqueue *vcmdq = s->vcmdq[index];
 
     if (!bs->viommu) {
         return -ENODEV;
     }
-    if (!data.vcmdq_log2size) {
+    if (!size) {
         return -EINVAL;
     }
-    if (!cpu_physical_memory_is_ram(data.vcmdq_base)) {
+    if (!cpu_physical_memory_is_ram(addr)) {
         return -EINVAL;
     }
     if (vcmdq) {
-        iommufd_backend_free_id(bs->viommu->iommufd, vcmdq->vcmdq_id);
+        iommufd_backend_free_id(bs->viommu->iommufd, vcmdq->hw_queue_id);
         g_free(vcmdq);
     }
     if (!s->viommu) {
@@ -433,9 +438,9 @@ static int tegra241_cmdqv_setup_vcmdq(Tegra241CMDQV *s, int index)
                                tegra241_cmdqv_irq_thread, s, QEMU_THREAD_JOINABLE);
         }
     }
-    vcmdq = iommufd_viommu_alloc_cmdq(s->viommu,
-                                      IOMMU_VCMDQ_TYPE_TEGRA241_CMDQV,
-                                      sizeof(data), (void *)&data);
+    vcmdq = iommufd_viommu_alloc_hw_queue(s->viommu,
+                                          IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV,
+                                          index, addr, size);
     if (!vcmdq) {
         error_report("failed to allocate VCMDQ%d, viommu_id=%d", index, s->viommu->viommu_id);
         return -ENODEV;
@@ -638,10 +643,10 @@ static void cmdqv_reset(DeviceState *d)
     Tegra241CMDQV *s = TEGRA241_CMDQV(d);
     int i;
 
-    for (i = 0; i < 128; i++) {
+    for (i = 127; i >= 0; i--) {
         if (s->vcmdq[i]) {
             iommufd_backend_free_id(s->viommu->iommufd,
-                                    s->vcmdq[i]->vcmdq_id);
+                                    s->vcmdq[i]->hw_queue_id);
             g_free(s->vcmdq[i]);
             s->vcmdq[i] = NULL;
         }

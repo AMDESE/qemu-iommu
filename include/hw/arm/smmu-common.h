@@ -205,6 +205,7 @@ struct SMMUState {
     QemuThread event_thread_id;
     bool event_thread_stop;
     QemuMutex event_thread_mutex;
+    struct iommu_hw_info_tegra241_cmdqv cmdqv_info;
 
     GHashTable *smmu_pcibus_by_busptr;
     GHashTable *configs; /* cache for configuration data */

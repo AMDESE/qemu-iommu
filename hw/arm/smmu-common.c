@@ -1034,6 +1034,7 @@ static bool smmu_dev_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     SMMUState *s = opaque;
     SMMUPciBus *sbus = smmu_get_sbus(s, bus);
     SMMUDevice *sdev = smmu_get_sdev(s, sbus, bus, devfn);
+    uint32_t data_type = IOMMU_HW_INFO_TYPE_DEFAULT;
 
     if (!s->nested) {
         return true;
@@ -1060,6 +1061,23 @@ static bool smmu_dev_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     sdev->viommu = s->viommu;
     QLIST_INSERT_HEAD(&s->viommu->device_list, sdev, next);
     trace_smmu_set_iommu_device(devfn, smmu_get_sid(sdev));
+
+    if (smmu_dev_get_info(sdev, &data_type, sizeof(sdev->info), &sdev->info)) {
+        error_report("failed to get SMMU device info");
+        return false;
+    }
+
+    if (s->has_cmdqv) {
+        uint64_t caps;
+
+        data_type = IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV;
+        if (!iommufd_backend_get_device_info(
+                sdev->idev->iommufd, sdev->idev->devid, &data_type,
+                &s->cmdqv_info, sizeof(s->cmdqv_info), &caps, NULL)) {
+            error_report("failed to get SMMU device info");
+            return false;
+        }
+    }
 
     return true;
 }
