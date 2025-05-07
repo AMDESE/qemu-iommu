@@ -2820,7 +2820,9 @@ AddressSpace *pci_device_iommu_address_space(PCIDevice *dev)
     int devfn;
 
     pci_device_get_iommu_bus_devfn(dev, &iommu_bus, &bus, &devfn);
-    if (iommu_bus) {
+//SURAVEE: HACK
+//    if (iommu_bus) {
+    if (iommu_bus && iommu_bus->iommu_ops->get_address_space) {
         return iommu_bus->iommu_ops->get_address_space(bus,
                                  iommu_bus->iommu_opaque, devfn);
     }
@@ -2860,12 +2862,13 @@ void pci_device_unset_iommu_device(PCIDevice *dev)
 
 void pci_setup_iommu(PCIBus *bus, const PCIIOMMUOps *ops, void *opaque)
 {
-    /*
-     * If called, pci_setup_iommu() should provide a minimum set of
-     * useful callbacks for the bus.
-     */
-    assert(ops);
-    assert(ops->get_address_space);
+//SURAVEE: HACK
+//    /*
+//     * If called, pci_setup_iommu() should provide a minimum set of
+//     * useful callbacks for the bus.
+//     */
+//    assert(ops);
+//    assert(ops->get_address_space);
 
     bus->iommu_ops = ops;
     bus->iommu_opaque = opaque;
