@@ -832,33 +832,33 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
 {
     VFIODevice *vdev = opaque;
     HostIOMMUDeviceCaps *caps = &hiod->caps;
+    HostIOMMUDeviceHwInfo hwinfo;
     enum iommu_hw_info_type type = IOMMU_HW_INFO_TYPE_DEFAULT;
-    union {
-        struct iommu_hw_info_vtd vtd;
-    } data;
     uint64_t hw_caps;
 
     hiod->agent = opaque;
 
     if (!iommufd_backend_get_device_info(vdev->iommufd, vdev->devid,
-                                         &type, &data, sizeof(data),
+                                         &type, &hwinfo, sizeof(hwinfo),
                                          &hw_caps, errp)) {
         return false;
     }
 
     hiod->name = g_strdup(vdev->name);
+    memcpy(&hiod->hwinfo, &hwinfo, sizeof(hwinfo));
     caps->type = type;
     caps->hw_caps = hw_caps;
 
     switch (type) {
     case IOMMU_HW_INFO_TYPE_INTEL_VTD:
-        caps->nesting = !!(data.vtd.ecap_reg & VTD_ECAP_NEST);
-        caps->fs1gp = !!(data.vtd.cap_reg & VTD_CAP_FS1GP);
-        caps->errata = data.vtd.flags & IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
+        caps->nesting = !!(hwinfo.vtd.ecap_reg & VTD_ECAP_NEST);
+        caps->fs1gp = !!(hwinfo.vtd.cap_reg & VTD_CAP_FS1GP);
+        caps->errata = hwinfo.vtd.flags & IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
         break;
     case IOMMU_HW_INFO_TYPE_ARM_SMMUV3:
     case IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV:
     case IOMMU_HW_INFO_TYPE_NONE:
+    case IOMMU_HW_INFO_TYPE_AMD:
         break;
     }
 
