@@ -14,6 +14,7 @@
 
 #include "qom/object.h"
 #include "qapi/error.h"
+#include "linux/iommufd.h"
 
 /**
  * struct HostIOMMUDeviceCaps - Define host IOMMU device capabilities.
@@ -38,6 +39,11 @@ typedef struct HostIOMMUDeviceCaps {
 #define TYPE_HOST_IOMMU_DEVICE "host-iommu-device"
 OBJECT_DECLARE_TYPE(HostIOMMUDevice, HostIOMMUDeviceClass, HOST_IOMMU_DEVICE)
 
+typedef union {
+    struct iommu_hw_info_vtd vtd;
+    struct iommu_hw_info_amd amd;
+} HostIOMMUDeviceHwInfo;
+
 struct HostIOMMUDevice {
     Object parent_obj;
 
@@ -46,6 +52,7 @@ struct HostIOMMUDevice {
     PCIBus *aliased_bus;
     int aliased_devfn;
     HostIOMMUDeviceCaps caps;
+    HostIOMMUDeviceHwInfo hwinfo;
 };
 
 /**
