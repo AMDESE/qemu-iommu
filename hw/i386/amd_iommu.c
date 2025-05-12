@@ -1412,7 +1412,6 @@ static void amdvi_handle_control_write(AMDVIState *s)
     unsigned long control = amdvi_readq(s, AMDVI_MMIO_CONTROL);
     s->enabled = !!(control & AMDVI_MMIO_CONTROL_AMDVIEN);
 
-    s->ats_enabled = !!(control & AMDVI_MMIO_CONTROL_HTTUNEN);
     s->evtlog_enabled = s->enabled && !!(control &
                         AMDVI_MMIO_CONTROL_EVENTLOGEN);
 
@@ -2263,7 +2262,6 @@ static void amdvi_init(AMDVIState *s)
     s->excl_allow = false;
     s->mmio_enabled = false;
     s->enabled = false;
-    s->ats_enabled = false;
     s->cmdbuf_enabled = false;
 
     /* reset MMIO */
