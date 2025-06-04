@@ -926,16 +926,14 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
 {
     VFIODevice *vdev = opaque;
     HostIOMMUDeviceCaps *caps = &hiod->caps;
+    VendorCaps *vendor_caps = &caps->vendor_caps;
     enum iommu_hw_info_type type;
-    union {
-        struct iommu_hw_info_vtd vtd;
-    } data;
     uint64_t hw_caps;
 
     hiod->agent = opaque;
 
-    if (!iommufd_backend_get_device_info(vdev->iommufd, vdev->devid,
-                                         &type, &data, sizeof(data),
+    if (!iommufd_backend_get_device_info(vdev->iommufd, vdev->devid, &type,
+                                         vendor_caps, sizeof(*vendor_caps),
                                          &hw_caps, errp)) {
         return false;
     }
@@ -946,9 +944,10 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
 
     switch (type) {
     case IOMMU_HW_INFO_TYPE_INTEL_VTD:
-        caps->nesting = !!(data.vtd.ecap_reg & VTD_ECAP_NEST);
-        caps->fs1gp = !!(data.vtd.cap_reg & VTD_CAP_FS1GP);
-        caps->errata = data.vtd.flags & IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
+        caps->nesting = !!(vendor_caps->vtd.ecap_reg & VTD_ECAP_NEST);
+        caps->fs1gp = !!(vendor_caps->vtd.cap_reg & VTD_CAP_FS1GP);
+        caps->errata = vendor_caps->vtd.flags &
+                       IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
         break;
     case IOMMU_HW_INFO_TYPE_ARM_SMMUV3:
     case IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV:
