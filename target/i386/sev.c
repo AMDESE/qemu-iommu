@@ -2265,6 +2265,28 @@ static void sev_tio_set_nonce(VFIOPCIDevice *vdev, uint8_t *data, ssize_t data_l
     write_full(fn, nonce, sizeof(nonce));
 }
 
+int amd_sviommu_mmap_private(__u64 gpa, __u64 useraddr, int size)
+{
+    int err = 0, ret = 0;
+    SevCommonState *sev_common = SEV_COMMON(MACHINE(qdev_get_machine())->cgs);
+
+    struct kvm_sev_snp_rmp_update params = {
+        .flags = KVM_SEV_SNP_RMP_FLAG_PRIVATE,
+        .useraddr = useraddr,
+        .gpa = gpa,
+        .size = size,
+    };
+
+    ret = sev_ioctl(sev_common->sev_fd, KVM_SEV_SNP_MMIO_RMP_UPDATE, &params, &err);
+    if (ret) {
+        fprintf(stderr, "amd_sviommu_mmap_private failed %d\n", ret);
+    } else {
+        fprintf(stderr, "amd_sviommu_mmap_private success\n");
+    }
+
+    return ret;
+}
+
 static int kvm_handle_vmgexit_tio_req(SevCommonState *sev_common, struct kvm_user_vmgexit *ex)
 {
     PCIDevice *pdev = NULL;
