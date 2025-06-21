@@ -816,6 +816,12 @@ struct MemoryRegion {
      * DMA map (RAM-like GPA that must not be exposed as DMA target).
      */
     bool skip_vfio_dma;
+    /*
+     * When set, this is an IOMMU device MMIO region backed by a host-provided
+     * ptr (e.g. iommufd mmap) with an associated KVM guest_memfd for
+     * shared/private state management (KVM_MEM_IOMMU_MMIO slot).
+     */
+    bool iommu_mmio;
 };
 
 struct IOMMUMemoryRegion {
@@ -1480,6 +1486,37 @@ void memory_region_init_ram_device_ptr(MemoryRegion *mr,
                                        const char *name,
                                        uint64_t size,
                                        void *ptr);
+
+/**
+ * memory_region_init_ram_guest_memfd_device_ptr: Initialize a RAM device
+ *     memory region from a host-provided pointer with an associated
+ *     KVM guest_memfd for shared/private state management.
+ *
+ * This is analogous to memory_region_init_ram_device_ptr() but additionally
+ * creates a KVM guest_memfd so that gmem_set_shareability() (and hence
+ * kvm_set_memory_attributes_private()) can operate on the region.  This is
+ * needed for IOMMU MMIO regions (e.g. iommufd-mmap'd VF MMIO pages for
+ * secure vIOMMU) where the host pointer comes from an iommufd mmap rather
+ * than a VFIO device, so VFIO_DEVICE_FEATURE_DMA_BUF is not available.
+ *
+ * The KVM memory slot for this region will use KVM_MEM_IOMMU_MMIO (not
+ * KVM_MEM_VFIO_DMABUF) so the kernel handles NPT fixups accordingly.
+ *
+ * @mr: the #MemoryRegion to be initialized.
+ * @owner: the object that tracks the region's reference count
+ * @name: the name of the region.
+ * @size: size of the region.
+ * @ptr: memory to be mapped; must contain at least @size bytes.
+ * @errp: pointer to Error*, to store an error if it happens.
+ *
+ * Returns %true on success, %false on failure (guest_memfd creation failed).
+ */
+bool memory_region_init_ram_guest_memfd_device_ptr(MemoryRegion *mr,
+                                                   Object *owner,
+                                                   const char *name,
+                                                   uint64_t size,
+                                                   void *ptr,
+                                                   Error **errp);
 
 /**
  * memory_region_init_alias: Initialize a memory region that aliases all or a

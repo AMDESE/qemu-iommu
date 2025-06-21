@@ -615,9 +615,18 @@ static int kvm_mem_flags(MemoryRegion *mr)
     if (memory_region_has_guest_memfd(mr)) {
         assert(kvm_guest_memfd_supported);
 
-        if (mr->ram_device) {
-            printf("+++Q+++ (%u) %s %u: VFIO DMABUF %s\n", getpid(), __func__, __LINE__, mr->name);
+        if (mr->iommu_mmio) {
+            /*
+             * IOMMU device MMIO region with a KVM-created guest_memfd (e.g.
+             * iommufd-backed sviommu VF MMIO page).  Use KVM_MEM_IOMMU_MMIO
+             * so the kernel applies the appropriate NPT fixups, distinct from
+             * VFIO DMA_BUF device-backed regions.
+             */
+            flags |= KVM_MEM_IOMMU_MMIO;
+            printf("+++Q+++ (%u) %s %u: IOMMU MMIO %s\n", getpid(), __func__, __LINE__, mr->name);
+        } else if (mr->ram_device) {
             flags |= KVM_MEM_VFIO_DMABUF;
+            printf("+++Q+++ (%u) %s %u: VFIO DMABUF %s\n", getpid(), __func__, __LINE__, mr->name);
         } else {
             flags |= KVM_MEM_GUEST_MEMFD;
         }
