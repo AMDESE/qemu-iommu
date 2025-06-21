@@ -71,5 +71,6 @@ void pc_system_parse_sev_metadata(uint8_t *flash_ptr, size_t flash_size);
 
 uint32_t sev_get_cbit_position(void);
 uint32_t sev_get_reduced_phys_bits(void);
+int sev_snp_launch_update_data_iommu(uint64_t gpa, void *hva, size_t len);
 
 #endif

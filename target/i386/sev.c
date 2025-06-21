@@ -1158,6 +1158,11 @@ sev_snp_launch_update_data(SevCommonState *sev_common, hwaddr gpa,
        return ret;
 }
 
+int sev_snp_launch_update_data_iommu(uint64_t gpa, void *hva, size_t len)
+{
+	return snp_launch_update_data(gpa, hva, len, KVM_SEV_SNP_PAGE_TYPE_NORMAL);
+}
+
 static int
 sev_snp_cpuid_info_fill(SnpCpuidInfo *snp_cpuid_info,
                         const KvmCpuidInfo *kvm_cpuid_info)
