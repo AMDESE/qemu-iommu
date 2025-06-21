@@ -371,12 +371,16 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
     mem.guest_memfd = slot->guest_memfd;
     mem.guest_memfd_offset = slot->guest_memfd_offset;
 
+    fprintf(stderr, "%s 0x%llx 0x%llx\n", __func__, mem.guest_phys_addr, mem.userspace_addr);
+
     if (slot->memory_size && !new && (mem.flags ^ slot->old_flags) & KVM_MEM_READONLY) {
         /* Set the slot size to 0 before setting the slot to the desired
          * value. This is needed based on KVM commit 75d61fbc. */
         mem.memory_size = 0;
 
         if (guest_memfd_supported(slot)) {
+            fprintf(stderr, "%s  kvm_guest_memfd_supported gpa 0x%llx HVA 0x%llx flags 0x%x\n",
+		    __func__, mem.guest_phys_addr, mem.userspace_addr, mem.flags);
             ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION2, &mem);
         } else {
             ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
@@ -387,6 +391,7 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
     }
     mem.memory_size = slot->memory_size;
     if (guest_memfd_supported(slot)) {
+        fprintf(stderr, "%s  kvm_guest_memfd_supported2 0x%llx 0x%llx\n", __func__, mem.guest_phys_addr, mem.userspace_addr);
         ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION2, &mem);
     } else {
         ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
