@@ -1728,6 +1728,52 @@ void memory_region_init_ram_device_ptr(MemoryRegion *mr,
     mr->ram_block = qemu_ram_alloc_from_ptr(size, ptr, mr, &error_abort);
 }
 
+bool memory_region_init_ram_guest_memfd_device_ptr(MemoryRegion *mr,
+                                                   Object *owner,
+                                                   const char *name,
+                                                   uint64_t size,
+                                                   void *ptr,
+                                                   Error **errp)
+{
+    uint64_t gmem_flags = 0;
+
+    /*
+     * Set up the RAM device region with the host-provided pointer (e.g. from
+     * an iommufd mmap).  This is identical to memory_region_init_ram_device_ptr
+     * but we follow up with a guest_memfd so the region can be converted
+     * between shared and private by gmem_set_shareability().
+     */
+    memory_region_init_ram_device_ptr(mr, owner, name, size, ptr);
+
+    if (!kvm_enabled()) {
+        return true;
+    }
+
+    /*
+     * For in-place SEV-SNP conversion the guest_memfd must be mmappable and
+     * start in the shared state (matching the behaviour in ram_block_add for
+     * regular RAM_GUEST_MEMFD regions).
+     */
+    if (current_machine->cgs && current_machine->cgs->convert_in_place) {
+        gmem_flags |= GUEST_MEMFD_FLAG_MMAP;
+        gmem_flags |= GUEST_MEMFD_FLAG_INIT_SHARED;
+    }
+
+    mr->ram_block->guest_memfd = kvm_create_guest_memfd(size, gmem_flags,
+                                                        0, errp);
+    if (mr->ram_block->guest_memfd < 0) {
+        return false;
+    }
+
+    /*
+     * Mark as IOMMU MMIO so kvm_mem_flags() selects KVM_MEM_IOMMU_MMIO
+     * instead of KVM_MEM_VFIO_DMABUF for the KVM memory slot.
+     */
+    mr->iommu_mmio = true;
+
+    return true;
+}
+
 void memory_region_init_alias(MemoryRegion *mr,
                               Object *owner,
                               const char *name,
