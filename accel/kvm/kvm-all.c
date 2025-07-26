@@ -349,6 +349,15 @@ int kvm_physical_memory_addr_from_host(KVMState *s, void *ram,
     return ret;
 }
 
+static bool guest_memfd_supported(KVMSlot *slot)
+{
+	if (kvm_guest_memfd_supported &&
+	    ((slot->guest_memfd >= 0) || (slot->flags & KVM_MEM_IOMMU_MMIO)))
+		return true;
+
+	return false;
+}
+
 static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, bool new)
 {
     KVMState *s = kvm_state;
@@ -367,7 +376,7 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
          * value. This is needed based on KVM commit 75d61fbc. */
         mem.memory_size = 0;
 
-        if (kvm_guest_memfd_supported) {
+        if (guest_memfd_supported(slot)) {
             ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION2, &mem);
         } else {
             ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
@@ -377,7 +386,7 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
         }
     }
     mem.memory_size = slot->memory_size;
-    if (kvm_guest_memfd_supported) {
+    if (guest_memfd_supported(slot)) {
         ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION2, &mem);
     } else {
         ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
@@ -389,7 +398,7 @@ err:
                               mem.userspace_addr, mem.guest_memfd,
                               mem.guest_memfd_offset, ret);
     if (ret < 0) {
-        if (kvm_guest_memfd_supported) {
+        if (guest_memfd_supported(slot)) {
                 error_report("%s: KVM_SET_USER_MEMORY_REGION2 failed, slot=%d,"
                         " start=0x%" PRIx64 ", size=0x%" PRIx64 ","
                         " flags=0x%" PRIx32 ", guest_memfd=%" PRId32 ","
