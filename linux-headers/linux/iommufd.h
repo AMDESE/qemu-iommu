@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_VIOMMU_COMMAND = 0x95,
 };
 
 /**
@@ -394,6 +395,9 @@ struct iommu_vfio_ioas {
  *                          Any domain attached to the non-PASID part of the
  *                          device must also be flagged, otherwise attaching a
  *                          PASID will blocked.
+ *                          For the user that wants to attach PASID, ioas is
+ *                          not recommended for both the non-PASID part
+ *                          and PASID part of the device.
  *                          If IOMMU does not support PASID it will return
  *                          error (-EOPNOTSUPP).
  */
@@ -453,15 +457,26 @@ struct iommu_hwpt_arm_smmuv3 {
 };
 
 /**
+ * struct iommu_hwpt_amd_guest - AMD IOMMU guest I/O page table data
+ *				 (IOMMU_HWPT_DATA_AMD_GUEST)
+ * @dte: Guest Device Table Entry (DTE)
+ */
+struct iommu_hwpt_amd_guest {
+	__aligned_u64 dte[4];
+};
+
+/**
  * enum iommu_hwpt_data_type - IOMMU HWPT Data Type
  * @IOMMU_HWPT_DATA_NONE: no data
  * @IOMMU_HWPT_DATA_VTD_S1: Intel VT-d stage-1 page table
  * @IOMMU_HWPT_DATA_ARM_SMMUV3: ARM SMMUv3 Context Descriptor Table
+ * @IOMMU_HWPT_DATA_AMD_GUEST: AMD IOMMU guest page table
  */
 enum iommu_hwpt_data_type {
 	IOMMU_HWPT_DATA_NONE = 0,
 	IOMMU_HWPT_DATA_VTD_S1 = 1,
 	IOMMU_HWPT_DATA_ARM_SMMUV3 = 2,
+	IOMMU_HWPT_DATA_AMD_GUEST = 3,
 };
 
 /**
@@ -610,6 +625,32 @@ struct iommu_hw_info_tegra241_cmdqv {
 };
 
 /**
+ * struct iommu_hw_info_amd - AMD IOMMU device info
+ *
+ * @efr : Value of AMD IOMMU Extended Feature Register (EFR)
+ * @efr2: Value of AMD IOMMU Extended Feature 2 Register (EFR2)
+ *
+ * Please See description of these registers in the following sections of
+ * the AMD I/O Virtualization Technology (IOMMU) Specification.
+ * (https://docs.amd.com/v/u/en-US/48882_3.10_PUB)
+ *
+ * - MMIO Offset 0030h IOMMU Extended Feature Register
+ * - MMIO Offset 01A0h IOMMU Extended Feature 2 Register
+ *
+ * Note: The EFR and EFR2 are raw values reported by hardware.
+ * VMM is responsible to determine the appropriate flags to be exposed to
+ * the VM since cetertain features are not currently supported by the kernel
+ * for HW-vIOMMU.
+ *
+ * Current VMM-allowed list of feature flags are:
+ * - EFR[GTSup, GASup, GioSup, PPRSup, EPHSup, GATS, GLX, PASmax]
+ */
+struct iommu_hw_info_amd {
+	__aligned_u64 efr;
+	__aligned_u64 efr2;
+};
+
+/**
  * enum iommu_hw_info_type - IOMMU Hardware Info Types
  * @IOMMU_HW_INFO_TYPE_NONE: Output by the drivers that do not report hardware
  *                           info
@@ -618,6 +659,7 @@ struct iommu_hw_info_tegra241_cmdqv {
  * @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type
  * @IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                     SMMUv3) info type
+ * @IOMMU_HW_INFO_TYPE_AMD: AMD IOMMU info type
  */
 enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_NONE = 0,
@@ -625,6 +667,7 @@ enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_INTEL_VTD = 1,
 	IOMMU_HW_INFO_TYPE_ARM_SMMUV3 = 2,
 	IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV = 3,
+	IOMMU_HW_INFO_TYPE_AMD = 4,
 };
 
 /**
@@ -636,15 +679,23 @@ enum iommu_hw_info_type {
  *                                   IOMMU_HWPT_GET_DIRTY_BITMAP
  *                                   IOMMU_HWPT_SET_DIRTY_TRACKING
  *
+ * @IOMMU_HW_CAP_PCI_PASID_EXEC: Execute Permission Supported, user ignores it
+ *                               when the struct
+ *                               iommu_hw_info::out_max_pasid_log2 is zero.
+ * @IOMMU_HW_CAP_PCI_PASID_PRIV: Privileged Mode Supported, user ignores it
+ *                               when the struct
+ *                               iommu_hw_info::out_max_pasid_log2 is zero.
  */
 enum iommufd_hw_capabilities {
 	IOMMU_HW_CAP_DIRTY_TRACKING = 1 << 0,
+	IOMMU_HW_CAP_PCI_PASID_EXEC = 1 << 1,
+	IOMMU_HW_CAP_PCI_PASID_PRIV = 1 << 2,
 };
 
 /**
  * enum iommufd_hw_info_flags - Flags for iommu_hw_info
- * @IOMMU_HW_INFO_FLAG_INPUT_TYPE: If set, @data_type carries an input type for
- *                                 user space to request for a specific info
+ * @IOMMU_HW_INFO_FLAG_INPUT_TYPE: If set, @in_data_type carries an input type
+ *                                 for user space to request for a specific info
  */
 enum iommufd_hw_info_flags {
 	IOMMU_HW_INFO_FLAG_INPUT_TYPE = 1 << 0,
@@ -986,12 +1037,14 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_DEFAULT: Reserved for future use
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
- *                                    SMMUv3) Virtual Interface (VINTF)
+ *                                    SMMUv3) enabled ARM SMMUv3 type
+ * @IOMMU_VIOMMU_TYPE_AMD: AMD HW-vIOMMU type
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
 	IOMMU_VIOMMU_TYPE_ARM_SMMUV3 = 1,
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
+	IOMMU_VIOMMU_TYPE_AMD = 3,
 };
 
 /**
@@ -1008,6 +1061,18 @@ enum iommu_viommu_type {
 struct iommu_viommu_tegra241_cmdqv {
 	__aligned_u64 out_vintf_mmap_offset;
 	__aligned_u64 out_vintf_mmap_length;
+};
+
+/**
+ * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
+ * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ * @kvmfd: KVM FD handler
+ * @reserved: Must be zero
+ */
+struct iommu_viommu_amd {
+	__aligned_u64 out_vfmmio_mmap_offset;
+	__u32 kvmfd;
+	__u32 reserved; /* must be last */
 };
 
 /**
@@ -1048,16 +1113,54 @@ struct iommu_viommu_alloc {
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
 
 /**
+ * enum viommu_command_ops - viommu command operations
+ * @IOMMU_VIOMMU_COMMAND_OP_SET: Set the command's data
+ * @IOMMU_VIOMMU_COMMAND_OP_GET: Get the command's data
+ */
+enum viommu_command_ops {
+	IOMMU_VIOMMU_COMMAND_OP_SET = 0,
+	IOMMU_VIOMMU_COMMAND_OP_GET = 1,
+};
+
+/**
+ * struct iommu_viommu_command - iommu viommu command multiplexer
+ * @size: sizeof(struct iommu_viommu_command)
+ * @object_id: ID of the vIOMMU if required
+ * @op: One of enum viommu_command_ops
+ * @index: Command index to match with the value
+ * @__reserved: Must be 0
+ * @val64: Command data to set or data returned on get
+ *
+ * This multiplexer allows controlling commands on vIOMMU.
+ * IOMMU_VIOMMU_COMMAND_OP_SET will load a command and
+ * IOMMU_VIOMMU_COMMAND_OP_GET will return the current value.
+ */
+struct iommu_viommu_command {
+	__u32 size;
+	__u32 object_id;
+	__u16 op;
+	__u16 index;
+	__u32 __reserved;
+	__aligned_u64 val64;
+};
+#define IOMMU_VIOMMU_COMMAND _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_COMMAND)
+
+/**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
  * @size: sizeof(struct iommu_vdevice_alloc)
  * @viommu_id: vIOMMU ID to associate with the virtual device
  * @dev_id: The physical device to allocate a virtual instance on the vIOMMU
  * @out_vdevice_id: Object handle for the vDevice. Pass to IOMMU_DESTORY
  * @virt_id: Virtual device ID per vIOMMU, e.g. vSID of ARM SMMUv3, vDeviceID
- *           of AMD IOMMU, and vRID of a nested Intel VT-d to a Context Table
+ *           of AMD IOMMU, and vRID of Intel VT-d
  *
  * Allocate a virtual device instance (for a physical device) against a vIOMMU.
  * This instance holds the device's information (related to its vIOMMU) in a VM.
+ * User should use IOMMU_DESTROY to destroy the virtual device before
+ * destroying the physical device (by closing vfio_cdev fd). Otherwise the
+ * virtual device would be forcibly destroyed on physical device destruction,
+ * its vdevice_id would be permanently leaked (unremovable & unreusable) until
+ * iommu fd closed.
  */
 struct iommu_vdevice_alloc {
 	__u32 size;
@@ -1091,7 +1194,7 @@ struct iommu_ioas_change_process {
 
 /**
  * enum iommu_veventq_flag - flag for struct iommufd_vevent_header
- * @IOMMU_VEVENTQ_FLAG_OVERFLOW: vEVENTQ has lost vEVENTs
+ * @IOMMU_VEVENTQ_FLAG_LOST_EVENTS: vEVENTQ has lost vEVENTs
  */
 enum iommu_veventq_flag {
 	IOMMU_VEVENTQ_FLAG_LOST_EVENTS = (1U << 0),
@@ -1175,7 +1278,7 @@ struct iommu_vevent_tegra241_cmdqv {
  * struct iommu_veventq_alloc - ioctl(IOMMU_VEVENTQ_ALLOC)
  * @size: sizeof(struct iommu_veventq_alloc)
  * @flags: Must be 0
- * @viommu: virtual IOMMU ID to associate the vEVENTQ with
+ * @viommu_id: virtual IOMMU ID to associate the vEVENTQ with
  * @type: Type of the vEVENTQ. Must be defined in enum iommu_veventq_type
  * @veventq_depth: Maximum number of events in the vEVENTQ
  * @out_veventq_id: The ID of the new vEVENTQ
@@ -1230,6 +1333,9 @@ enum iommu_hw_queue_type {
 	 *   emulated vSMMU's IDR1.CMDQS to log2(huge page size / 16 bytes)
 	 */
 	IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV = 1,
+	IOMMU_HW_QUEUE_TYPE_AMD_CMD,
+	IOMMU_HW_QUEUE_TYPE_AMD_EVT,
+	IOMMU_HW_QUEUE_TYPE_AMD_PPR,
 };
 
 /**
