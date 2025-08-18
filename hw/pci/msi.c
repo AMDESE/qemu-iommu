@@ -73,7 +73,7 @@ static inline uint8_t msi_cap_sizeof(uint16_t flags)
     return 0;
 }
 
-//#define MSI_DEBUG
+#define MSI_DEBUG
 
 #ifdef MSI_DEBUG
 # define MSI_DPRINTF(fmt, ...)                                          \
