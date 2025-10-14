@@ -328,6 +328,7 @@ bool iommufd_backend_get_device_info(IOMMUFDBackend *be, uint32_t devid,
     return true;
 }
 
+//FOR HWPT
 int iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t hwpt_id,
                                      uint32_t data_type, uint32_t entry_len,
                                      uint32_t *entry_num, void *data_ptr)
