@@ -1220,6 +1220,7 @@ free:
     return -EINVAL;
 }
 
+//FOR HWPT
 int smmu_hwpt_invalidate_cache(SMMUS1Hwpt *s1_hwpt, uint32_t type, uint32_t len,
                                uint32_t *num, void *reqs)
 {
@@ -1231,6 +1232,7 @@ int smmu_hwpt_invalidate_cache(SMMUS1Hwpt *s1_hwpt, uint32_t type, uint32_t len,
                                             type, len, num, reqs);
 }
 
+//FOR VIOMMU
 int smmu_viommu_invalidate_cache(IOMMUFDViommu *viommu, uint32_t type,
                                  uint32_t len, uint32_t *num, void *reqs)
 {
