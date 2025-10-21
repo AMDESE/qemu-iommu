@@ -384,8 +384,6 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
      */
     memory_region_init_io(&s->devtab_mr, OBJECT(s), &dte_ops, s, name, s->devtab_len);
     memory_region_add_subregion_overlap(get_system_memory(), offset, &s->devtab_mr, 1);
-
-    amd_viommu_mmio_write(s, AMDVI_MMIO_DEVICE_TABLE, 8, val);
 }
 
 static inline void amdvi_handle_control_write(AMDVIState *s)
