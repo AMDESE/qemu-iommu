@@ -286,19 +286,19 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val,
     if (offset % 0x20 == 0) {
         return; /* Ignore DTE[0] */
     } else if (offset % 0x20 == 0x8) {
-	fprintf(stderr, "DEBUG: %s offset1=%#llx\n", __func__, (unsigned long long )offset);
+	fprintf(stderr, "DEBUG: %s offset1=%#llx, val=%#lx\n", __func__, (unsigned long long )offset, val);
 	offset3 = offset + 0x10;
 	offset2 = offset + 0x8;
 	offset1 = offset;
 	offset0 = offset - 0x8;
     } else if (offset % 0x20 == 0x10) {
-	fprintf(stderr, "DEBUG: %s offset2=%#llx\n", __func__, (unsigned long long )offset);
+	fprintf(stderr, "DEBUG: %s offset2=%#llx, val=%#lx\n", __func__, (unsigned long long )offset, val);
 	offset3 = offset + 0x8;
 	offset2 = offset;
 	offset1 = offset - 0x8;
 	offset0 = offset - 0x10;
     } else if (offset % 0x20 == 0x18) {
-	fprintf(stderr, "DEBUG: %s offset3=%#llx\n", __func__, (unsigned long long )offset);
+	fprintf(stderr, "DEBUG: %s offset3=%#llx, val=%#lx\n", __func__, (unsigned long long )offset, val);
 	offset3 = offset;
 	offset2 = offset - 0x8;
 	offset1 = offset - 0x10;
@@ -1011,6 +1011,9 @@ static void amd_viommu_realize(DeviceState *dev, Error **errp)
     if (ret < 0) {
         return;
     }
+
+    s->devtab = g_malloc0(AMDVI_DEVTAB_SIZE);
+    memset(s->devtab, 0, AMDVI_DEVTAB_SIZE);
 
     /* setup IOMMU PCI device ID in the guest. */
     amd_viommu_host_dma_iommu(bus, s, s->pci.dev.devfn);

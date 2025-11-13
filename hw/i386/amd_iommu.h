@@ -366,7 +366,8 @@ struct AMDVIState {
     size_t devtab_len;           /* device table length          */
     MemoryRegion devtab_mr;      /* device table region          */
 
-    uint8_t devtab[AMDVI_DEVTAB_SIZE];
+//    uint8_t devtab[AMDVI_DEVTAB_SIZE];
+    uint8_t *devtab;
     int dev_domid[AMDVI_DEVID_MAX];
 
     struct IOMMUFDHWqueue *cmdbuf_hwq;
