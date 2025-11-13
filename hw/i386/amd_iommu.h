@@ -343,6 +343,11 @@ struct AMDVI_dte_key {
     uint8_t devfn;
 };
 
+struct AMDVI_dte_info {
+    int domid;
+    bool gcr3_updated;
+};
+
 struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
     AMDVIPCIState pci;          /* IOMMU PCI device             */
@@ -363,11 +368,15 @@ struct AMDVIState {
     bool excl_enabled;
 
     hwaddr devtab_base;          /* device table base address    */
+    size_t devtab_size;          /* device table size            */
     size_t devtab_len;           /* device table length          */
     MemoryRegion devtab_mr;      /* device table region          */
 
-    uint8_t devtab[AMDVI_DEVTAB_SIZE];
-    int dev_domid[AMDVI_DEVID_MAX];
+    uint8_t *devtab;		 /* device table */
+
+    /* TODO: Move s->dte_info to AMDIOMMUFDDevice structure */
+    /* This should also be not using array */
+    struct AMDVI_dte_info dte_info[AMDVI_DEVID_MAX];
 
     struct IOMMUFDHWqueue *cmdbuf_hwq;
     hwaddr cmdbuf;               /* command buffer base address  */
