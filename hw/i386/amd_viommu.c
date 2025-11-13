@@ -119,26 +119,62 @@ static uint64_t amdvi_mmio_read(void *opaque, hwaddr addr, unsigned size)
     return val;
 }
 
+//SURAVEE: TODO: Clean up
+#if 0
+static int amd_viommu_clear_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
+				  uint16_t dev_id, uint64_t *dte)
+{
+    int ret;
+    uint32_t hwpt_id;
+    Error *local_err = NULL;
+    VFIODevice *vdev = dev->hiod->agent;
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(dev->hiod);
+
+    fprintf(stderr, "DEBUG: %s: DETACH, idev.dev_id=%#x, hwpt_id=%#x:%#x\n",
+	    __func__, vdev->idev.dev_id, dev->v1_hwpt.hwpt_id, dev->v2_hwpt_id);
+
+    /* FIXME: Why does this returns bool */
+    if (!iommufd_device_detach_hwpt(&vdev->idev))
+        return -EINVAL;
+
+    /* Attach to parent domain */
+    ret = iommufd_backend_alloc_hwpt(dev->iommu_state->iommufd,
+                                     vdev->idev.dev_id,
+                                     idev->ioas_id,
+                                     IOMMU_HWPT_ALLOC_NEST_PARENT,
+                                     IOMMU_HWPT_DATA_NONE,
+                                     0, NULL, &hwpt_id, &local_err);
+    if (!ret) {
+        fprintf(stderr, "%s: iommufd_backend_alloc_hwpt failed\n", __func__);
+        return -EINVAL;
+    }
+
+    fprintf(stderr, "DEBUG: %s: ALLOC_PARENT devid=%#x\n", __func__, vdev->idev.dev_id);
+
+    dev->v2_hwpt_id = -1;
+
+    fprintf(stderr, "DEBUG: %s: ATTACH PARENT, idev.dev_id=%#x, hwpt_id=%#x:%#x\n",
+	    __func__, vdev->idev.dev_id, dev->v1_hwpt.hwpt_id, hwpt_id);
+
+    return iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
+}
+#endif
+
 static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
 				  uint16_t dev_id, uint64_t *dte)
 {
-    Error *local_err = NULL;
-    int ret = -EINVAL;
+    int ret;
     uint32_t hwpt_id;
+    Error *local_err = NULL;
     struct iommu_hwpt_amd_guest hwpt;
-    VFIODevice *vdev;
-
-    if (!dev)
-        goto out;
-
-    vdev = dev->hiod->agent;
+    VFIODevice *vdev = dev->hiod->agent;
 
     hwpt.dte[0] = dte[0];
     hwpt.dte[1] = dte[1];
     hwpt.dte[2] = dte[2];
     hwpt.dte[3] = dte[3];
 
-    fprintf(stderr, "DEBUG: %s: ALLOC , gdevid=%#x, dte=%#016lx:%016lx:%016lx:%016lx\n",
+    fprintf(stderr, "DEBUG: %s: ALLOC , gdevid=%#x, dte=%016lx:%016lx:%016lx:%016lx\n",
 		__func__, dev_id, dte[0], dte[1], dte[2], dte[3]);
 
     /*
@@ -161,10 +197,7 @@ static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
     fprintf(stderr, "DEBUG: %s: ATTACH, idev.dev_id=%#x, hwpt_id=%#x:%#x\n",
 	    __func__, vdev->idev.dev_id, dev->v1_hwpt.hwpt_id, hwpt_id);
 
-    ret = iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
-
-out:
-    return ret;
+    return iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
 }
 
 static uint64_t amd_viommu_dte_read(void *opaque, hwaddr offset, unsigned size)
@@ -206,7 +239,7 @@ static int amd_viommu_get_v1_hwpt(AMDIOMMUFDDevice *dev, uint32_t devid, AMDVISt
     VFIODevice *vdev = dev->hiod->agent;
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(dev->hiod);
 
-    fprintf(stderr, "DEBUG: %s: devid=%#x\n", __func__, devid);
+    fprintf(stderr, "DEBUG: %s: ALLOC_PARENT devid=%#x\n", __func__, devid);
 
 //SURAVEE: TODO: MOVE THIS
     /* Allocated nested parent domain */
@@ -246,23 +279,43 @@ static AMDIOMMUFDDevice *amd_viommu_get_device_from_bdf(AMDVIState *s, uint16_t 
 
     g_hash_table_iter_init(&as_it, s->amd_iommufd_dev_hash);
 
+fprintf(stderr, "DEBUG0: %s: bus=%#x, devfn=%#x\n", __func__, bus, devfn);
+
     while (g_hash_table_iter_next(&as_it, (void **)&key, (void **)&amd_idev)) {
+fprintf(stderr, "DEBUG1: %s: iter bus=%#x, devfn=%#x\n", __func__, pci_bus_num(key->bus), key->devfn);
         if (pci_bus_num(key->bus) == bus && key->devfn == devfn)
             return amd_idev;
     }
     return NULL;
 }
 
-static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val,
-                             unsigned size)
+static uint64_t get_gcr3_trp(uint64_t *dte)
+{
+    uint64_t tmp1, tmp2, tmp3;
+
+    tmp1 = (dte[0] >> 58) & 0x7ULL;
+    tmp2 = (dte[1] >> 16) & 0xFFFFULL;
+    tmp3 = (dte[1] >> 43) & 0x3FFFFFULL;
+
+    return (tmp1 << 12) | (tmp2 << 15) | (tmp3 << 31);
+}
+
+/*
+ * The offset is from the begining of the devtab_mr, which starts from
+ * the primary_bus devid.
+ */
+static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
 {
     AMDVIState *s = opaque;
     AMDIOMMUFDDevice *dev;
+    AMDVI_dte_info *dte_info;
+    bool v = false, gv = false;
+    uint64_t gcr3_trp;
     uint64_t dte[4];
-    uint64_t dte0, dte1, offset0 = 0, offset1 = 0, offset2 = 0, offset3 = 0;
+    uint64_t offset0 = 0, offset1 = 0, offset2 = 0, offset3 = 0;
     uint32_t devid;
-    uint32_t domid = -1;
 
+    /* Storing value in the devtab */
     if (size ==  2) {
         stw_le_p(&s->devtab[offset], val);
     } else if (size == 4) {
@@ -271,77 +324,109 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val,
         stq_le_p(&s->devtab[offset], val);
     }
 
-    devid = offset >> 5;
-    if (devid >= AMDVI_DEVID_MAX) {
-	error_printf("amd_viommu: Invalid device id (%#x)", devid);
+    /*
+     * Calculate devid from offset using DTE size 0x20. Note that this is offset
+     * from the devid from primary bus. See amd_viommu_handle_dev_tab_mmio_write().
+     */
+    devid = (pci_bus_num(s->primary_bus) << 8) + (offset >> 5);
+
+//    fprintf(stderr, "DEBUG: %s: primary_bus=%#x, devid=%#x, offset=%#lx \n",
+//	__func__, pci_bus_num(s->primary_bus), devid, offset);
+
+    if (devid > ((s->last_bus_nr << 8) | 0xFF)) {
+        error_printf("%s: devid %#x is out of range (%#x)\n", __func__,
+                     devid, ((s->last_bus_nr << 8) | 0xFF));
         return;
     }
+
+    dte_info = &s->dte_info[devid];
+    dte_info->last = dte_info->curr;
+    dte_info->curr = (offset % 0x20) >> 3;
 
     /*
      * Note:
      * For now, we only care about the case when writing to
      * DTE[1] (for DomainID, GCR3 Table Root Pointer)
      * DTE[2] (for GuestPagingMode).
+     *
+     * FIXME: Needs to handle 128-bit
      */
     if (offset % 0x20 == 0) {
-        return; /* Ignore DTE[0] */
+	offset3 = offset + 0x18;
+	offset2 = offset + 0x10;
+	offset1 = offset + 0x8;
+	offset0 = offset;
     } else if (offset % 0x20 == 0x8) {
-	fprintf(stderr, "DEBUG: %s offset1=%#llx\n", __func__, (unsigned long long )offset);
 	offset3 = offset + 0x10;
 	offset2 = offset + 0x8;
 	offset1 = offset;
 	offset0 = offset - 0x8;
     } else if (offset % 0x20 == 0x10) {
-	fprintf(stderr, "DEBUG: %s offset2=%#llx\n", __func__, (unsigned long long )offset);
 	offset3 = offset + 0x8;
 	offset2 = offset;
 	offset1 = offset - 0x8;
 	offset0 = offset - 0x10;
     } else if (offset % 0x20 == 0x18) {
-	fprintf(stderr, "DEBUG: %s offset3=%#llx\n", __func__, (unsigned long long )offset);
 	offset3 = offset;
 	offset2 = offset - 0x8;
 	offset1 = offset - 0x10;
 	offset0 = offset - 0x18;
     }
 
-    dte0 = amd_viommu_dte_read(opaque, offset0, size);
-    dte1 = amd_viommu_dte_read(opaque, offset1, size);
+    dte[0] = amd_viommu_dte_read(opaque, offset0, size);
+    dte[1] = amd_viommu_dte_read(opaque, offset1, size);
+    dte[2] = amd_viommu_dte_read(opaque, offset2, size);
+    dte[3] = amd_viommu_dte_read(opaque, offset3, size);
 
-    if (dte0 & 0xE03ULL) {
-        domid = dte1 & 0xFFFFULL;
-	/* TODO: Move s->dev_domid to AMDIOMMUFDDevice structure */
-        int tmp = s->dev_domid[devid];
+    v = dte[0] & 0x1ULL;
+    gv = (dte[0] >> 54) & 0x1ULL ;
+    gcr3_trp = get_gcr3_trp(dte);
 
-	if (tmp == domid)
-		return;
+    fprintf(stderr, "DEBUG: %s: gdevid=%#04x, gcr3_trp=%016lx DTE[%lu] offset=%#05lx, dte=%016lx:%016lx:%016lx:%016lx\n",
+            __func__, devid, gcr3_trp, (offset % 0x20) >> 3, offset, dte[0], dte[1], dte[2], dte[3]);
 
-	s->dev_domid[devid] = domid;
-	trace_amd_viommu_dte(s->devtab_base + offset0, s->devtab_base + offset1,
-                             size, val, devid, domid);
+    /*
+     * Handle cases:
+     * 1. Writing DTE[1] then DTE[0]
+     * 2. Writing DTE[0] then DTE[1] since
+     *    - Linux 6.12 and older does not guarantee the ordering.
+     *    - Linux 6.13 and later uses cmpxchg16, which starts from
+     *      least significant bit.
+     */
+    if ((dte_info->last == 1 && dte_info->curr == 0) ||
+        (dte_info->last == 0 && dte_info->curr == 1)) {
+        /*
+         * Update GCR3 when V and GV is set, and GCR3 is updated.
+         */
+        if (!v || (dte_info->dte0 == dte[0] && dte_info->dte1 == dte[1]))
+            return;
+
+        int ret;
+
+        /* FIXME: Currently, we iterate through all devices instead of g_hash_table_lookup()
+         * since we cannot get PCIBus from bus number to use it as key
+         *
+         * TODO: Use bus number itself in key as bus number is used in comparision
+         */
+        dev = amd_viommu_get_device_from_bdf(s, devid >> 8, devid & 0xFF);
+        if (!dev) {
+            fprintf(stderr, "DEBUG: %s: %u: Failed get_device_from_bdf (%#x)\n",
+                    __func__, __LINE__, devid);
+            exit(-EINVAL);
+        }
+
+        /* Write everything */
+        ret = amd_viommu_update_gcr3(s, dev, devid, dte);
+        if (ret)
+            return;
+
+        dte_info->dte0 = dte[0];
+        dte_info->dte1 = dte[1];
+
+        /* clear dte tracking */
+	dte_info->last = -1;
+	dte_info->curr = -1;
     }
-
-   /* FIXME: Currently, we iterate through all devices instead of g_hash_table_lookup()
-    * since we cannot get PCIBus from bus number to use it as key
-    *
-    * TODO: Use bus number itself in key as bus number is used in comparision
-    */
-     devid = (pci_bus_num(s->primary_bus) << 8) + devid;
-     dev = amd_viommu_get_device_from_bdf(s, devid >> 8, devid & 0xFF);
-     if (!dev) {
-        fprintf(stderr, "DEBUG: %s: %u: Failed get_device_from_bdf\n", __func__, __LINE__);
-	exit(-EINVAL);
-     }
-
-        dte[0] = amd_viommu_dte_read(opaque, offset0, size);
-        dte[1] = amd_viommu_dte_read(opaque, offset1, size);
-        dte[2] = amd_viommu_dte_read(opaque, offset2, size);
-        if (dte[2] == 0xffffffffffffffff)
-            dte[2] = 0;
-        dte[3] = amd_viommu_dte_read(opaque, offset3, size);
-        if (dte[3] == 0xffffffffffffffff)
-            dte[3] = 0;
-        amd_viommu_update_gcr3(s, dev, devid, dte);
 }
 
 static const MemoryRegionOps dte_ops = {
@@ -359,29 +444,61 @@ static const MemoryRegionOps dte_ops = {
     }
 };
 
-/* TODO: Call this function only first time for each IOMMU instance? */
 static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
 {
     char name[30];
-    uint64_t offset;
+    uint64_t offset, req_size;
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_DEVICE_TABLE);
 
     snprintf(name, 30, "%s-%02u", "amd-iommu-devtab", s->iommu.id);
+
+    /* Free up previously allocated table */
+    if (s->devtab) {
+        free(s->devtab);
+        s->devtab = NULL;
+        s->devtab_base = 0;
+        s->devtab_len = 0;
+        s->devtab_size = 0;
+    }
+
     s->devtab_base = (val & AMDVI_MMIO_DEVTAB_BASE_MASK);
-    s->devtab_len = ((s->last_bus_nr - pci_bus_num(s->primary_bus)) << 8) | 0xFF;
-    s->devtab_len *= 0x20;
+
+    /* Offset to the first entry in DTE to be set up for listener */
     offset = s->devtab_base + ((pci_bus_num(s->primary_bus) << 8) * 0x20);
 
-    /*
-     * Set up memory notifier for IOMMU Device Table
-     */
-    fprintf(stderr, "DEBUG: %s: %s, base=%lx, offset=%#lx, bus=%#x, last_bus=%#x, len=%#lx\n", __func__,
-	name, s->devtab_base, offset,
-        pci_bus_num(s->primary_bus), s->last_bus_nr, s->devtab_len);
+    /* The devtab_size is the size specifyied by guest indicated is (n + 1) * 4 Kbytes. */
+    s->devtab_size = ((val & AMDVI_MMIO_DEVTAB_SIZE_MASK) + 1) << 12;
 
     /*
-     * DTE invalidation commands are acceleration (3rd 4K MMIO space). Hence trap
-     * DTE memory region write operation
+     * The devtab_len is calculated based on the reported bus information
+     * for this IOMMU
+     */
+    s->devtab_len = ((s->last_bus_nr - pci_bus_num(s->primary_bus) + 1) << 8);
+    s->devtab_len *= 0x20;
+
+    /* The size is calculated from the space before the bus + devtab_len */
+    req_size = ((pci_bus_num(s->primary_bus) << 8) * 0x20) + s->devtab_len;
+    if (req_size > s->devtab_size) {
+         fprintf(stderr, "%s: Invalid devtab size %#lx (required %#lx)\n", __func__,
+                 s->devtab_size, req_size);
+         exit(-EINVAL);
+    }
+
+    /* Only allocate devtab storage for the specified bus range */
+    s->devtab = g_malloc0(s->devtab_len);
+    if (!s->devtab)
+        exit(-ENOMEM);
+
+    memset(s->devtab, 0, s->devtab_len);
+
+    fprintf(stderr, "DEBUG: %s: %s, base=%#lx, offset=%#lx, bus=%#x, last_bus=%#x, len=%#lx size=%#lx, req_size=%#lx\n",
+            __func__, name, s->devtab_base, offset,
+            pci_bus_num(s->primary_bus), s->last_bus_nr, s->devtab_len,
+            s->devtab_size, req_size);
+
+    /*
+     * Set up memory listener for IOMMU Device Table for DTEs within
+     * the range of devid for this IOMMU only
      */
     memory_region_init_io(&s->devtab_mr, OBJECT(s), &dte_ops, s, name, s->devtab_len);
     memory_region_add_subregion_overlap(get_system_memory(), offset, &s->devtab_mr, 1);
@@ -630,8 +747,12 @@ static void amd_viommu_init(AMDVIState *s)
     s->ats_enabled = false;
     s->cmdbuf_enabled = false;
 
-    for (i = 0; i < AMDVI_DEVID_MAX; i++)
-	s->dev_domid[i] = -1;
+    for (i = 0; i < AMDVI_DEVID_MAX; i++) {
+	s->dte_info[i].last = -1;
+	s->dte_info[i].curr = -1;
+	s->dte_info[i].dte0 = ~0ULL;
+	s->dte_info[i].dte1 = ~0ULL;
+    }
 
     /* reset MMIO */
     memset(s->mmior, 0, AMD_VIOMMU_MMIO_SIZE);
