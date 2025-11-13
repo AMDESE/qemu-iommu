@@ -252,7 +252,8 @@
 #define AMDVI_DEV_LINT0_PASS_MASK       (1ULL << 62)
 #define AMDVI_DEV_LINT1_PASS_MASK       (1ULL << 63)
 
-#define AMDVI_DEVTAB_SIZE               8192
+//#define AMDVI_DEVTAB_SIZE               8192
+#define AMDVI_DEVTAB_SIZE               0x200000
 #define AMDVI_DEVID_MAX                 0xFFFF
 
 /* Interrupt remapping table fields (Guest VAPIC not enabled) */
