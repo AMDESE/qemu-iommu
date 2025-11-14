@@ -422,7 +422,7 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
      * The devtab_len is calculated based on the reported bus information
      * for this IOMMU
      */
-    s->devtab_len = ((s->last_bus_nr - pci_bus_num(s->primary_bus)) << 8) | 0xFF;
+    s->devtab_len = ((s->last_bus_nr - pci_bus_num(s->primary_bus) + 1) << 8);
     s->devtab_len *= 0x20;
 
     /* The size is calculated from the space before the bus + devtab_len */
