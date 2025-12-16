@@ -426,6 +426,9 @@ struct AMDVIState {
 
     /* DMA address translation */
     bool dma_remap;
+
+    /* root bus to register IOMMU ops */
+    PCIBus *root_bus;
 };
 
 uint64_t amdvi_extended_feature_register(AMDVIState *s);
