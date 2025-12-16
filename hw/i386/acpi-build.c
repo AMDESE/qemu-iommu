@@ -1655,103 +1655,105 @@ build_waet(GArray *table_data, BIOSLinker *linker, const char *oem_id,
  */
 #define IOAPIC_SB_DEVID   (uint64_t)PCI_BUILD_BDF(0, PCI_DEVFN(0x14, 0))
 
-/*
- * Insert IVHD entry for device and recurse, insert alias, or insert range as
- * necessary for the PCI topology.
- */
-static void
-insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
+static void insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
 {
-    GArray *table_data = opaque;
     AmdIvhdDeviceEntry entry = {};
+    GArray *table_data = opaque;
 
     /* "Select" IVHD entry, type 0x2 */
     entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_SELECT;
     entry.devid = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn);
-
     g_array_append_vals(table_data, &entry, sizeof(entry));
-
-    if (object_dynamic_cast(OBJECT(dev), TYPE_PCI_BRIDGE)) {
-        PCIBus *sec_bus = pci_bridge_get_sec_bus(PCI_BRIDGE(dev));
-        uint8_t sec = pci_bus_num(sec_bus);
-        uint8_t sub = dev->config[PCI_SUBORDINATE_BUS];
-
-        if (pci_bus_is_express(sec_bus)) {
-            /*
-             * Walk the bus if there are subordinates, otherwise use a range
-             * to cover an entire leaf bus.  We could potentially also use a
-             * range for traversed buses, but we'd need to take care not to
-             * create both Select and Range entries covering the same device.
-             * This is easier and potentially more compact.
-             *
-             * An example bare metal system seems to use Select entries for
-             * root ports without a slot (ie. built-ins) and Range entries
-             * when there is a slot.  The same system also only hard-codes
-             * the alias range for an onboard PCIe-to-PCI bridge, apparently
-             * making no effort to support nested bridges.  We attempt to
-             * be more thorough here.
-             */
-            if (sec == sub) { /* leaf bus */
-                /* "Start of Range" IVHD entry, type 0x3 */
-                entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_START_RANGE;
-                entry.devid = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
-                g_array_append_vals(table_data, &entry, sizeof(entry));
-
-                /* "End of Range" IVHD entry, type 0x4 */
-                entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
-                entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
-                g_array_append_vals(table_data, &entry, sizeof(entry));
-            } else {
-                pci_for_each_device(sec_bus, sec, insert_ivhd, table_data);
-            }
-        } else {
-            /*
-             * If the secondary bus is conventional, then we need to create an
-             * Alias range for everything downstream.  The range covers the
-             * first devfn on the secondary bus to the last devfn on the
-             * subordinate bus.  The alias target depends on legacy versus
-             * express bridges, just as in pci_device_iommu_address_space().
-             * DeviceIDa vs DeviceIDb as per the AMD IOMMU spec.
-             */
-            AmdIvhdDeviceEntryExt entry_ext = {};
-
-            entry_ext.type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALIAS_START_RANGE;
-            entry_ext.devid_a = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
-
-            if (pci_is_express(dev) &&
-                pcie_cap_get_type(dev) == PCI_EXP_TYPE_PCI_BRIDGE) {
-                entry_ext.devid_b = entry_ext.devid_a;
-            } else {
-                entry_ext.devid_b = PCI_BUILD_BDF(pci_bus_num(bus),
-                                                  dev->devfn);
-            }
-
-            /* "Alias Start of Range" IVHD entry, type 0x43, 8 bytes */
-            g_array_append_vals(table_data, &entry_ext, sizeof(entry_ext));
-
-            /* "End of Range" IVHD entry, type 0x4 */
-            entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
-            entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
-            g_array_append_vals(table_data, &entry, sizeof(entry));
-        }
-    }
 }
 
-/* For all PCI host bridges, walk and insert IVHD entries */
-static int
-ivrs_host_bridges(Object *obj, void *opaque)
+/*
+ * Insert IVHD entry for device and recurse, insert alias, or insert range as
+ * necessary for the PCI topology.
+ */
+
+static void add_ivhd_entries_from_bus(PCIBus *bus, GArray *table_data)
 {
-    GArray *ivhd_blob = opaque;
+    AmdIvhdDeviceEntry entry = {};
+    PCIBus *child_bus;
+    PCIDevice *parent_dev;
+    uint8_t sub;
 
-    if (object_dynamic_cast(obj, TYPE_PCI_HOST_BRIDGE)) {
-        PCIBus *bus = PCI_HOST_BRIDGE(obj)->bus;
-
-        if (bus && !pci_bus_bypass_iommu(bus)) {
-            pci_for_each_device_under_bus(bus, insert_ivhd, ivhd_blob);
-        }
+    if (!bus->parent_dev) {
+        goto select_devices;
     }
 
-    return 0;
+    parent_dev = bus->parent_dev;
+    sub = parent_dev->config[PCI_SUBORDINATE_BUS];
+
+    if (pci_bus_is_express(bus)) {
+        /*
+         * Walk the bus if there are subordinates, otherwise use a range
+         * to cover an entire leaf bus.  We could potentially also use a
+         * range for traversed buses, but we'd need to take care not to
+         * create both Select and Range entries covering the same device.
+         * This is easier and potentially more compact.
+         *
+         * An example bare metal system seems to use Select entries for
+         * root ports without a slot (ie. built-ins) and Range entries
+         * when there is a slot.  The same system also only hard-codes
+         * the alias range for an onboard PCIe-to-PCI bridge, apparently
+         * making no effort to support nested bridges.  We attempt to
+         * be more thorough here.
+         */
+        if (sub != pci_bus_num(bus)) {
+            goto select_devices;
+        }
+
+        /* "Start of Range" IVHD entry, type 0x3 */
+        entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_START_RANGE;
+        entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN(0, 0));
+        g_array_append_vals(table_data, &entry, sizeof(entry));
+
+        /* "End of Range" IVHD entry, type 0x4 */
+        entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
+        entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
+        g_array_append_vals(table_data, &entry, sizeof(entry));
+
+        return;
+    } else {
+        /*
+         * If the secondary bus is conventional, then we need to create an
+         * Alias range for everything downstream.  The range covers the
+         * first devfn on the secondary bus to the last devfn on the
+         * subordinate bus.  The alias target depends on legacy versus
+         * express bridges, just as in pci_device_iommu_address_space().
+         * DeviceIDa vs DeviceIDb as per the AMD IOMMU spec.
+         */
+        AmdIvhdDeviceEntryExt entry_ext = {};
+
+        entry_ext.type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALIAS_START_RANGE;
+        entry_ext.devid_a = PCI_BUILD_BDF(pci_bus_num(bus), PCI_DEVFN(0, 0));
+
+        if (pci_is_express(parent_dev) &&
+            pcie_cap_get_type(parent_dev) == PCI_EXP_TYPE_PCI_BRIDGE) {
+            entry_ext.devid_b = entry_ext.devid_a;
+        } else {
+            entry_ext.devid_b = PCI_BUILD_BDF(
+                                        pci_bus_num(pci_get_bus(parent_dev)),
+                                        parent_dev->devfn);
+        }
+        /* "Alias Start of Range" IVHD entry, type 0x43, 8 bytes */
+        g_array_append_vals(table_data, &entry_ext, sizeof(entry_ext));
+
+        /* "End of Range" IVHD entry, type 0x4 */
+        entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
+        entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
+        g_array_append_vals(table_data, &entry, sizeof(entry));
+
+        return;
+    }
+
+select_devices:
+    pci_for_each_device_under_bus(bus, insert_ivhd, table_data);
+
+    QLIST_FOREACH(child_bus, &bus->child, sibling) {
+        add_ivhd_entries_from_bus(child_bus, table_data);
+    }
 }
 
 /* IVHD type 0x10 reports features using Feature Reporting field, which has
@@ -1812,8 +1814,8 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * blob further below.  Fall back to an entry covering all devices, which
      * is sufficient when no aliases are present.
      */
-    object_child_foreach_recursive(object_get_root(),
-                                   ivrs_host_bridges, ivhd_blob);
+    assert(s->root_bus);
+    add_ivhd_entries_from_bus(s->root_bus, ivhd_blob);
 
     if (!ivhd_blob->len) {
         /*
