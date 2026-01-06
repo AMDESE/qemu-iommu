@@ -158,7 +158,7 @@ static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
 				  uint16_t dev_id, uint64_t *dte)
 {
     int ret;
-    uint32_t hwpt_id;
+    uint32_t hwpt_id, old_hwpt;
     Error *local_err = NULL;
     struct iommu_hwpt_amd_guest hwpt;
     VFIODevice *vdev = dev->hiod->agent;
@@ -189,12 +189,20 @@ static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
     if (!ret)
         return -EINVAL;
 
+
+    old_hwpt = dev->v2_hwpt_id;
     dev->v2_hwpt_id = hwpt_id;
 
     fprintf(stderr, "DEBUG: %s: ATTACH, idev.dev_id=%#x, hwpt_id=%#x:%#x\n",
 	    __func__, vdev->idev.dev_id, dev->v1_hwpt.hwpt_id, hwpt_id);
 
-    return iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
+    ret = iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
+
+    if (old_hwpt) {
+        iommufd_backend_free_id(s->iommufd, old_hwpt);
+    }
+
+    return ret;
 }
 
 static uint64_t amd_viommu_dte_read(void *opaque, hwaddr offset, unsigned size)
@@ -876,6 +884,29 @@ static void *amdvi_walk_bus_setup(PCIBus *b, void *opaque)
     return opaque;
 }
 
+static void amdvi_alloc_passthrough_hwpt(AMDIOMMUFDDevice *dev, AMDVIState *s)
+{
+
+    struct iommu_hwpt_amd_guest hwpt = {{0,0,0,0}};
+    VFIODevice *vdev = dev->hiod->agent;
+    Error *local_err = NULL;
+    uint32_t hwpt_id;
+    int ret;
+
+
+    ret = iommufd_backend_alloc_hwpt(s->iommufd,
+                                     vdev->idev.dev_id,
+                                     s->core->viommu_id,
+                                     0,
+                                     IOMMU_HWPT_DATA_AMD_GUEST,
+                                     sizeof(hwpt), &hwpt, &hwpt_id, &local_err);
+
+    assert(ret == true);
+
+    dev->passthrough_hwpt_id = hwpt_id;
+    dev->v2_hwpt_id = 0;
+}
+
 static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
 {
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
@@ -895,6 +926,9 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
 
     s->enabled = true;
     fprintf(stderr, "DEBUG: %s: iommufd vIOMMU initialized.\n", __func__);
+
+    /* Allocate a passthrough domain */
+    amdvi_alloc_passthrough_hwpt(amd_idev, s);
     return 0;
 }
 
@@ -974,6 +1008,8 @@ static bool amdvi_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
     amd_idev->iommu_state = s;
     amd_idev->hiod = hiod;
+    amd_idev->v2_hwpt_id =  0;
+    amd_idev->passthrough_hwpt_id = 0;
 
     g_hash_table_insert(s->amd_iommufd_dev_hash, new_key, amd_idev);
 
@@ -1239,11 +1275,34 @@ static const Property amd_viommu_properties[] = {
 static void amd_viommu_sysbus_reset(DeviceState *dev)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
+    struct amd_as_key *key;
+    GHashTableIter it;
+    AMDIOMMUFDDevice *amd_idev;
+    Error *local_err = NULL;
 
     fprintf(stderr, "Sysbus reset\n");
     if (s->devtab) {
         cleanup_devtab(s);
     }
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        HostIOMMUDeviceIOMMUFD *hdev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+        if (!amd_idev->v2_hwpt_id) {
+            continue;
+        }
+
+        host_iommu_device_iommufd_attach_hwpt(
+                hdev,
+                amd_idev->passthrough_hwpt_id,
+                &local_err);
+
+        iommufd_backend_free_id(s->iommufd, amd_idev->v2_hwpt_id);
+        amd_idev->v2_hwpt_id = 0;
+    }
+
 
 }
 
