@@ -331,6 +331,7 @@ struct AMDIOMMUFDDevice {
     uint32_t gdevid;
     struct AMDVIHwpt v1_hwpt;
     int v2_hwpt_id;
+    int passthrough_hwpt_id;
     HostIOMMUDevice *hiod;
     AMDVIState *iommu_state;
     QLIST_ENTRY(AMDIOMMUFDDevice) next;
