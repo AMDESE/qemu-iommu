@@ -428,6 +428,17 @@ static const MemoryRegionOps dte_ops = {
     }
 };
 
+static void cleanup_devtab(AMDVIState *s)
+{
+    memory_region_del_subregion(get_system_memory(), &s->devtab_mr);
+    object_unparent(OBJECT(&s->devtab_mr));
+    free(s->devtab);
+    s->devtab = NULL;
+    s->devtab_base = 0;
+    s->devtab_len = 0;
+    s->devtab_size = 0;
+}
+
 static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
 {
     char name[30];
@@ -438,11 +449,7 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
 
     /* Free up previously allocated table */
     if (s->devtab) {
-        free(s->devtab);
-        s->devtab = NULL;
-        s->devtab_base = 0;
-        s->devtab_len = 0;
-        s->devtab_size = 0;
+        cleanup_devtab(s);
     }
 
     s->devtab_base = (val & AMDVI_MMIO_DEVTAB_BASE_MASK);
@@ -1229,11 +1236,23 @@ static const Property amd_viommu_properties[] = {
     DEFINE_PROP_UINT32("translate-id", AMDVIState, translate_id, 0),
 };
 
+static void amd_viommu_sysbus_reset(DeviceState *dev)
+{
+    AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
+
+    fprintf(stderr, "Sysbus reset\n");
+    if (s->devtab) {
+        cleanup_devtab(s);
+    }
+
+}
+
 static void amd_viommu_class_init(ObjectClass *klass, void* data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     X86IOMMUClass *dc_class = X86_IOMMU_DEVICE_CLASS(klass);
 
+    device_class_set_legacy_reset(dc, amd_viommu_sysbus_reset);
     dc->vmsd = &vmstate_amdvi;
     device_class_set_props(dc, amd_viommu_properties);
     dc->hotpluggable = false;
