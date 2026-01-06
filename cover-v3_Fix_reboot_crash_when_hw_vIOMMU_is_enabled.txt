@@ -1,0 +1,51 @@
+Problem Overview:
+-----------------
+When a guest VM reboots with AMD vIOMMU enabled, two critical cleanup
+operations are missing, causing the hypervisor to operate on stale state
+from the previous boot:
+
+1. Stale device table memory region intercepts BIOS writes
+   
+   QEMU registers a memory region to trap device table entry (DTE) writes
+   when the guest kernel programs the device table base address register.
+   This allows the vIOMMU to create nested hardware page tables (HWPT) for
+   devices.
+   
+   However, the guest kernel does not clear this register during shutdown,
+   leaving the memory region active across reboots. Consequently, QEMU
+   incorrectly intercepts BIOS memory accesses as DTE writes, attempting
+   to create nested page tables with invalid data, which causes QEMU to
+   abort.
+
+2. Devices remain attached to stale nested domains with invalid GCR3
+   
+   When the guest configures nested (V2) page tables by writing DTEs, the
+   vIOMMU creates nested HWPTs containing guest userspace information
+   (GCR3 root pointer, page table levels, etc.). The host kernel uses this
+   to configure nested DTEs for devices.
+   
+   Since the guest does not explicitly clear DTE entries during shutdown,
+   devices remain attached to nested domains with GCR3 pointers from the
+   previous kernel. When devices attempt DMA operations during reboot
+   (before the new kernel initializes the IOMMU), these translations fail,
+   resulting in IO_PAGE_FAULTs.
+
+Solution:
+---------
+Patch 1: Implement proper cleanup of the device table memory region during
+         system reset, preventing QEMU from intercepting BIOS memory
+         accesses.
+
+Patch 2: Attach all devices to a passthrough nested domain with NULL GCR3
+         during reset. This forces the IOMMU to use only V1 page
+         tables, allowing DMA operations during the reboot transition
+         period.
+
+
+Sairaj Kodilkar (2):
+  amd_viommu: Remove device table region during sysbus reset
+  amd_viommu: Attach device to passthrough nested domain during reboot
+
+ hw/i386/amd_iommu.h  |  1 +
+ hw/i386/amd_viommu.c | 94 ++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 88 insertions(+), 7 deletions(-)
