@@ -1752,10 +1752,13 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
 {
     AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu_get_default());
+    PCIDevice *iommu_dev = &(s->pci->dev);
     GArray *ivhd_blob = g_array_new(false, true, 1);
     AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
     uint64_t feature_report;
+    int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
+    uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
 
     acpi_table_begin(&table, table_data);
     /* IVinfo - IO virtualization information common to all
@@ -1816,9 +1819,7 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     /* IVHD length */
     build_append_int_noprefix(table_data, ivhd_blob->len + 24, 2);
     /* DeviceID */
-    build_append_int_noprefix(table_data,
-                              object_property_get_int(OBJECT(s->pci), "addr",
-                                                      &error_abort), 2);
+    build_append_int_noprefix(table_data, iommu_devid, 2);
     /* Capability offset */
     build_append_int_noprefix(table_data, s->pci->capab_offset, 2);
     /* IOMMU base address */
@@ -1850,10 +1851,9 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
 
     /* IVHD length */
     build_append_int_noprefix(table_data, ivhd_blob->len + 40, 2);
+
     /* DeviceID */
-    build_append_int_noprefix(table_data,
-                              object_property_get_int(OBJECT(s->pci), "addr",
-                                                      &error_abort), 2);
+    build_append_int_noprefix(table_data, iommu_devid, 2);
     /* Capability offset */
     build_append_int_noprefix(table_data, s->pci->capab_offset, 2);
     /* IOMMU base address */
