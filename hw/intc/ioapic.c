@@ -431,8 +431,9 @@ static void ioapic_machine_done_notify(Notifier *notifier, void *data)
 #ifdef CONFIG_KVM
     IOAPICCommonState *s = container_of(notifier, IOAPICCommonState,
                                         machine_done);
+    X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
 
-    if (kvm_irqchip_is_split()) {
+    if (kvm_irqchip_is_split() && x86ms->ioapic_as != &address_space_memory) {
         X86IOMMUState *iommu = x86_iommu_get_default();
         if (iommu) {
             /* Register this IOAPIC with IOMMU IEC notifier, so that
