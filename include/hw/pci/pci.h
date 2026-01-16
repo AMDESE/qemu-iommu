@@ -442,6 +442,18 @@ typedef struct PCIIOMMUOps {
      * enum viommu_flags.
      */
     uint64_t (*get_viommu_flags)(void *opaque);
+
+    /**
+     * @get_x86_iommu: get parent x86-iommu for given hardware (AMD/Intel)
+     *
+     * Callback is required if IOMMU defines x86->int_remap()
+     *
+     * @opaque: the data passed to pci_setup_iommu()
+     *
+     * @x86_iommu: A pointer to store the x86-iommu object
+     */
+    int (*get_x86_iommu)(void *opaque, void **x86_iommu);
+
 } PCIIOMMUOps;
 
 bool pci_device_get_iommu_bus_devfn(PCIDevice *dev, PCIBus **piommu_bus,
