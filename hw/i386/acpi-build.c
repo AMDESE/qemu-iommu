@@ -1747,6 +1747,33 @@ ivrs_host_bridges(Object *obj, void *opaque)
     return 0;
 }
 
+/* IVHD type 0x10 reports features using Feature Reporting field, which has
+ * different format than extended feature register (EFR) in the IOMMU MMIO
+ * space.
+ *
+ * Convert the EFR format to feature reporting format.
+ */
+static uint32_t
+get_amd_ivhd_feature_report(AMDVIState *s)
+{
+    uint64_t feature = amdvi_extended_feature_register(s);
+    bool is_gt = !!(feature & AMDVI_FEATURE_GT);
+    bool is_ga = !!(feature & AMDVI_FEATURE_GA);
+    uint64_t hats_mode = (feature & AMDVI_HATS_MODE_MASK) >>
+                         AMDVI_HATS_MODE_SHIFT;
+    uint64_t gats_mode = (feature & AMDVI_GATS_MODE_MASK) >>
+                         AMDVI_GATS_MODE_SHIFT;
+    uint32_t feature_report;
+
+    feature_report = s->xtsup << AMD_IVHD_FEATURE_REPORT_XT_SUP_SHIFT |
+                     is_gt << AMD_IVHD_FEATURE_REPORT_GT_SUP_SHIFT |
+                     is_ga << AMD_IVHD_FEATURE_REPORT_GA_SUP_SHIFT |
+                     hats_mode << AMD_IVHD_FEATURE_REPORT_HATS_SHIFT |
+                     gats_mode << AMD_IVHD_FEATURE_REPORT_GATS_SHIFT;
+
+    return feature_report;
+}
+
 static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
@@ -1829,13 +1856,7 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     /* IOMMU info */
     build_append_int_noprefix(table_data, 0, 2);
     /* IOMMU Feature Reporting */
-    feature_report = (48UL << 30) | /* HATS   */
-                     (48UL << 28) | /* GATS   */
-                     (1UL << 2)   | /* GTSup  */
-                     (1UL << 6);    /* GASup  */
-    if (s->xtsup) {
-        feature_report |= (1UL << 0); /* XTSup */
-    }
+    feature_report = get_amd_ivhd_feature_report(s);
     build_append_int_noprefix(table_data, feature_report, 4);
 
     /* IVHD entries as found above */
