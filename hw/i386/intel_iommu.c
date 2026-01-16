@@ -4716,10 +4716,18 @@ static AddressSpace *vtd_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
     return &vtd_as->as;
 }
 
+static int vtd_get_x86_iommu(void *opaque, void **x86_iommu)
+{
+    IntelIOMMUState *s = opaque;
+    *x86_iommu = X86_IOMMU_DEVICE(s);
+    return 0;
+}
+
 static PCIIOMMUOps vtd_iommu_ops = {
     .get_address_space = vtd_host_dma_iommu,
     .set_iommu_device = vtd_dev_set_iommu_device,
     .unset_iommu_device = vtd_dev_unset_iommu_device,
+    .get_x86_iommu = vtd_get_x86_iommu,
 };
 
 static bool vtd_decide_config(IntelIOMMUState *s, Error **errp)
