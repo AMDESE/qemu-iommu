@@ -1663,11 +1663,13 @@ static void
 insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
 {
     GArray *table_data = opaque;
-    uint32_t entry;
+    AmdIvhdDeviceEntry entry = {};
 
     /* "Select" IVHD entry, type 0x2 */
-    entry = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn) << 8 | 0x2;
-    build_append_int_noprefix(table_data, entry, 4);
+    entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_SELECT;
+    entry.devid = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn);
+
+    g_array_append_vals(table_data, &entry, sizeof(entry));
 
     if (object_dynamic_cast(OBJECT(dev), TYPE_PCI_BRIDGE)) {
         PCIBus *sec_bus = pci_bridge_get_sec_bus(PCI_BRIDGE(dev));
@@ -1691,11 +1693,14 @@ insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
              */
             if (sec == sub) { /* leaf bus */
                 /* "Start of Range" IVHD entry, type 0x3 */
-                entry = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0)) << 8 | 0x3;
-                build_append_int_noprefix(table_data, entry, 4);
+                entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_START_RANGE;
+                entry.devid = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
+                g_array_append_vals(table_data, &entry, sizeof(entry));
+
                 /* "End of Range" IVHD entry, type 0x4 */
-                entry = PCI_BUILD_BDF(sub, PCI_DEVFN(31, 7)) << 8 | 0x4;
-                build_append_int_noprefix(table_data, entry, 4);
+                entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
+                entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
+                g_array_append_vals(table_data, &entry, sizeof(entry));
             } else {
                 pci_for_each_device(sec_bus, sec, insert_ivhd, table_data);
             }
@@ -1708,24 +1713,26 @@ insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
              * express bridges, just as in pci_device_iommu_address_space().
              * DeviceIDa vs DeviceIDb as per the AMD IOMMU spec.
              */
-            uint16_t dev_id_a, dev_id_b;
+            AmdIvhdDeviceEntryExt entry_ext = {};
 
-            dev_id_a = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
+            entry_ext.type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALIAS_START_RANGE;
+            entry_ext.devid_a = PCI_BUILD_BDF(sec, PCI_DEVFN(0, 0));
 
             if (pci_is_express(dev) &&
                 pcie_cap_get_type(dev) == PCI_EXP_TYPE_PCI_BRIDGE) {
-                dev_id_b = dev_id_a;
+                entry_ext.devid_b = entry_ext.devid_a;
             } else {
-                dev_id_b = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn);
+                entry_ext.devid_b = PCI_BUILD_BDF(pci_bus_num(bus),
+                                                  dev->devfn);
             }
 
             /* "Alias Start of Range" IVHD entry, type 0x43, 8 bytes */
-            build_append_int_noprefix(table_data, dev_id_a << 8 | 0x43, 4);
-            build_append_int_noprefix(table_data, dev_id_b << 8 | 0x0, 4);
+            g_array_append_vals(table_data, &entry_ext, sizeof(entry_ext));
 
             /* "End of Range" IVHD entry, type 0x4 */
-            entry = PCI_BUILD_BDF(sub, PCI_DEVFN(31, 7)) << 8 | 0x4;
-            build_append_int_noprefix(table_data, entry, 4);
+            entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_END_RANGE;
+            entry.devid = PCI_BUILD_BDF(sub, PCI_DEVFN_MAX - 1);
+            g_array_append_vals(table_data, &entry, sizeof(entry));
         }
     }
 }
@@ -1783,20 +1790,20 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     GArray *ivhd_blob = g_array_new(false, true, 1);
     AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
-    uint64_t feature_report;
     int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
     uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
+    AmdIvrsVendorHdr ivrs_hdr = {};
+    AmdIvhdHdr10 ivhd10 = {};
+    AmdIvhdHdr11 ivhd11 = {};
 
     acpi_table_begin(&table, table_data);
     /* IVinfo - IO virtualization information common to all
      * IOMMU units in a system
      */
-    build_append_int_noprefix(table_data,
-                             (1UL << 0) | /* EFRSup */
-                             (40UL << 8), /* PASize */
-                             4);
-    /* reserved */
-    build_append_int_noprefix(table_data, 0, 8);
+    ivrs_hdr.ivinfo = AMD_IVINFO_EFR_SUP | AMD_IVINFO_PASIZE_52BIT;
+    ivrs_hdr.reserved = 0;
+
+    g_array_append_vals(table_data, &ivrs_hdr, sizeof(ivrs_hdr));
 
     /*
      * A PCI bus walk, for each PCI host bridge, is necessary to create a
@@ -1814,7 +1821,8 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
          *   These are 4-byte device entries currently reporting the range of
          *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
          */
-        build_append_int_noprefix(ivhd_blob, 0x0000001, 4);
+        AmdIvhdDeviceEntry entry = { .type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALL };
+        g_array_append_vals(ivhd_blob, &entry, sizeof(entry));
     }
 
     /*
@@ -1826,76 +1834,37 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
      */
     if (x86_iommu_ir_supported(x86_iommu_get_default())) {
-        build_append_int_noprefix(ivhd_blob,
-                                 (0x1ull << 56) |           /* type IOAPIC */
-                                 (IOAPIC_SB_DEVID << 40) |  /* IOAPIC devid */
-                                 0x48,                      /* special device */
-                                 8);
+        AmdIvhdDeviceEntryExt entry_ext = {
+                    .type = AMD_IVHD_DEVICE_ENTRY_TYPE_SPECIAL_DEVICE,
+                    .devid_b = IOAPIC_SB_DEVID,
+                    .varity = IVHD_VARIETY_IOAPIC
+                };
+
+        g_array_append_vals(ivhd_blob, &entry_ext, sizeof(entry_ext));
     }
 
-    /* IVHD definition - type 10h */
-    build_append_int_noprefix(table_data, 0x10, 1);
-    /* virtualization flags */
-    build_append_int_noprefix(table_data,
-                             (1UL << 0) | /* HtTunEn      */
-                             (1UL << 4) | /* iotblSup     */
-                             (1UL << 6) | /* PrefSup      */
-                             (1UL << 7),  /* PPRSup       */
-                             1);
-
-    /* IVHD length */
-    build_append_int_noprefix(table_data, ivhd_blob->len + 24, 2);
-    /* DeviceID */
-    build_append_int_noprefix(table_data, iommu_devid, 2);
-    /* Capability offset */
-    build_append_int_noprefix(table_data, s->pci->capab_offset, 2);
-    /* IOMMU base address */
-    build_append_int_noprefix(table_data, s->mr_mmio.addr, 8);
-    /* PCI Segment Group */
-    build_append_int_noprefix(table_data, 0, 2);
-    /* IOMMU info */
-    build_append_int_noprefix(table_data, 0, 2);
-    /* IOMMU Feature Reporting */
-    feature_report = get_amd_ivhd_feature_report(s);
-    build_append_int_noprefix(table_data, feature_report, 4);
-
+    ivhd10.type = 0x10;
+    ivhd10.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP |
+                   AMD_IVHD_FLAG_PREF_SUP  | AMD_IVHD_FLAG_PPR_SUP;
+    ivhd10.length = ivhd_blob->len + sizeof(ivhd10);
+    ivhd10.devid = iommu_devid;
+    ivhd10.capab_offset = s->pci->capab_offset;
+    ivhd10.base_addr = s->mr_mmio.addr;
+    ivhd10.iommu_feature_report = get_amd_ivhd_feature_report(s);
+    g_array_append_vals(table_data, &ivhd10, sizeof(ivhd10));
     /* IVHD entries as found above */
     g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
 
-   /* IVHD definition - type 11h */
-    build_append_int_noprefix(table_data, 0x11, 1);
-    /* virtualization flags */
-    build_append_int_noprefix(table_data,
-                             (1UL << 0) | /* HtTunEn      */
-                             (1UL << 4),  /* iotblSup     */
-                             1);
-
-    /* IVHD length */
-    build_append_int_noprefix(table_data, ivhd_blob->len + 40, 2);
-
-    /* DeviceID */
-    build_append_int_noprefix(table_data, iommu_devid, 2);
-    /* Capability offset */
-    build_append_int_noprefix(table_data, s->pci->capab_offset, 2);
-    /* IOMMU base address */
-    build_append_int_noprefix(table_data, s->mr_mmio.addr, 8);
-    /* PCI Segment Group */
-    build_append_int_noprefix(table_data, 0, 2);
-    /* IOMMU info */
-    build_append_int_noprefix(table_data, 0, 2);
-    /* IOMMU Attributes */
-    if (!s->iommu.dma_translation) {
-        build_append_int_noprefix(table_data, (1UL << 0) /* HATDis */, 4);
-    } else {
-        build_append_int_noprefix(table_data, 0, 4);
-    }
-    /* EFR Register Image */
-    build_append_int_noprefix(table_data,
-                              amdvi_extended_feature_register(s),
-                              8);
-    /* EFR Register Image 2 */
-    build_append_int_noprefix(table_data, 0, 8);
-
+    ivhd11.type = 0x11;
+    ivhd11.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP;
+    ivhd11.length = ivhd_blob->len + sizeof(ivhd11);
+    ivhd11.devid = iommu_devid;
+    ivhd11.capab_offset = s->pci->capab_offset;
+    ivhd11.base_addr = s->mr_mmio.addr;
+    ivhd11.iommu_attributes = !s->iommu.dma_translation <<
+                              AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
+    ivhd11.efr = amdvi_extended_feature_register(s);
+    g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));
     /* IVHD entries as found above */
     g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
 

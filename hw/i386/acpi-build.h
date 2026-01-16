@@ -45,7 +45,7 @@ typedef
 struct AmdIvrsVendorHdr {
     uint32_t ivinfo;
     uint64_t reserved;
-} __attribute__((packed)) AmdIvrsHdr;
+} __attribute__((packed)) AmdIvrsVendorHdr;
 
 /* IVHD type 10h */
 typedef
