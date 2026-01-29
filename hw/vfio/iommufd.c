@@ -837,18 +837,26 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
     int ret;
 
     if (!iommufd->vdevice && !idev->tdi_bound) {
-        iommufd->vdevice = iommufd_backend_alloc_vdev(idev, iommufd->viommu,
-                                                      pci_get_bdf(&vfio_pci_dev->pdev));
-        if (!iommufd->vdevice) {
-            error_setg(errp, "failed to allocate a vdevice");
+        uint32_t virt_id = pci_get_bdf(&vfio_pci_dev->pdev);
+        uint32_t vdevice_id;
+
+        if (!iommufd_backend_alloc_vdev(iommufd, idev->devid,
+                                        iommufd->viommu->viommu_id, virt_id,
+                                        &vdevice_id, errp)) {
             return -1;
         }
+
+        iommufd->vdevice = g_new0(IOMMUFDVdev, 1);
+        iommufd->vdevice->vdevice_id = vdevice_id;
+        iommufd->vdevice->virt_id = virt_id;
+        iommufd->vdevice->idev = idev;
+        iommufd->vdevice->viommu = iommufd->viommu;
     }
 
     ret = iommufd_backend_tsm_bind(idev->iommufd->vdevice, kvmfd);
 
     if (iommufd->vdevice && kvmfd == -1) {
-        iommufd_backend_free_id(iommufd, iommufd->vdevice->vdev_id);
+        iommufd_backend_free_id(iommufd, iommufd->vdevice->vdevice_id);
         g_free(iommufd->vdevice);
         iommufd->vdevice = NULL;
     }

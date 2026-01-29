@@ -356,37 +356,6 @@ int iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t hwpt_id,
     return ret;
 }
 
-struct IOMMUFDVdev *iommufd_backend_alloc_vdev(HostIOMMUDeviceIOMMUFD *idev,
-                                               IOMMUFDViommu *viommu,
-                                               uint64_t virt_id)
-{
-    int ret, fd = viommu->iommufd->fd;
-    struct IOMMUFDVdev *vdev = g_malloc(sizeof(*vdev));
-    struct iommu_vdevice_alloc alloc_vdev = {
-        .size = sizeof(alloc_vdev),
-        .viommu_id = viommu->viommu_id,
-        .dev_id = idev->devid,
-        .virt_id = virt_id,
-    };
-
-    ret = ioctl(fd, IOMMU_VDEVICE_ALLOC, &alloc_vdev);
-
-    trace_iommufd_backend_alloc_vdev(fd, idev->devid, viommu->viommu_id, virt_id,
-                                     alloc_vdev.out_vdevice_id, ret);
-
-    if (ret) {
-        error_report("IOMMU_VDEVICE_ALLOC failed: %s", strerror(errno));
-        g_free(vdev);
-        return NULL;
-    }
-
-    vdev->idev = idev;
-    vdev->viommu = viommu;
-    vdev->virt_id = virt_id;
-    vdev->vdev_id = alloc_vdev.out_vdevice_id;
-    return vdev;
-}
-
 int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
 {
     IOMMUFDViommu *viommu = vdev->viommu;
@@ -396,14 +365,14 @@ int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
         .size = sizeof(b),
         .viommu_id = viommu->viommu_id,
         .dev_id = idev->devid,
-        .vdevice_id = viommu->iommufd->vdevice->vdev_id,
+        .vdevice_id = vdev->vdevice_id,
         .kvmfd = kvmfd,
     };
 
     ret = ioctl(fd, IOMMU_VDEVICE_TSM_BIND, &b);
     if (ret < 0) {
         error_report("vfio: failed to bind TEE IO dev %X to CoCo VM: %d=%s",
-                     viommu->iommufd->vdevice->vdev_id, errno, strerror(errno));
+                     vdev->vdevice_id, errno, strerror(errno));
         return ret;
     }
     idev->tdi_bound = kvmfd >= 0;
@@ -424,7 +393,7 @@ int iommufd_backend_tsm_guest_request(struct IOMMUFDVdev *vdev,
         .size = sizeof(gr),
         .viommu_id = viommu->viommu_id,
         .dev_id = idev->devid,
-        .vdevice_id = viommu->iommufd->vdevice->vdev_id,
+        .vdevice_id = vdev->vdevice_id,
         .req = req,
         .rsp = rsp,
         .req_len = reqlen,
@@ -448,7 +417,7 @@ int iommufd_backend_tsm_guest_request(struct IOMMUFDVdev *vdev,
     *fw_err = gr.fw_err;
     if (ret < 0) {
         error_report("vfio: failed to TIO GR dev %X to CoCo VM: ret=%d %d=%s, fw_err=%x",
-                     viommu->iommufd->vdevice->vdev_id, ret, errno, strerror(errno), gr.fw_err);
+                     vdev->vdevice_id, ret, errno, strerror(errno), gr.fw_err);
         return ret;
     }
     trace_iommufd_tsm_guest_request(fd, gr.vdevice_id, gr.scope, gr.fw_err);
@@ -510,6 +479,33 @@ bool iommufd_backend_alloc_viommu(IOMMUFDBackend *be, uint32_t dev_id,
 
     g_assert(out_viommu_id);
     *out_viommu_id = alloc_viommu.out_viommu_id;
+    return true;
+}
+
+bool iommufd_backend_alloc_vdev(IOMMUFDBackend *be, uint32_t dev_id,
+                                uint32_t viommu_id, uint64_t virt_id,
+                                uint32_t *out_vdev_id, Error **errp)
+{
+    int ret;
+    struct iommu_vdevice_alloc alloc_vdev = {
+        .size = sizeof(alloc_vdev),
+        .viommu_id = viommu_id,
+        .dev_id = dev_id,
+        .virt_id = virt_id,
+    };
+
+    ret = ioctl(be->fd, IOMMU_VDEVICE_ALLOC, &alloc_vdev);
+
+    trace_iommufd_backend_alloc_vdev(be->fd, dev_id, viommu_id, virt_id,
+                                     alloc_vdev.out_vdevice_id, ret);
+
+    if (ret) {
+        error_setg_errno(errp, errno, "IOMMU_VDEVICE_ALLOC failed");
+        return false;
+    }
+
+    g_assert(out_vdev_id);
+    *out_vdev_id = alloc_vdev.out_vdevice_id;
     return true;
 }
 
