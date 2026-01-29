@@ -351,14 +351,18 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
     }
 
     if (vbasedev->tee_io) {
-        iommufd->viommu = iommufd_backend_alloc_viommu(iommufd, vbasedev->devid,
-                                                       IOMMU_VIOMMU_TYPE_AMD_TSM,
-                                                       hwpt_id);
+        uint32_t viommu_id;
 
-        if (!iommufd->viommu) {
-            error_setg(errp, "failed to allocate a viommu");
+        if (!iommufd_backend_alloc_viommu(iommufd, vbasedev->devid,
+                                          IOMMU_VIOMMU_TYPE_AMD_TSM,
+                                          hwpt_id, &viommu_id, errp)) {
             return false;
         }
+
+        iommufd->viommu = g_new0(IOMMUFDViommu, 1);
+        iommufd->viommu->iommufd = iommufd;
+        iommufd->viommu->s2_hwpt_id = hwpt_id;
+        iommufd->viommu->viommu_id = viommu_id;
     }
 
     hwpt = g_malloc0(sizeof(*hwpt));
