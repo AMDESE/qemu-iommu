@@ -306,10 +306,14 @@ struct iommu_ioas_unmap {
  *    iommu mappings. Value 0 disables combining, everything is mapped to
  *    PAGE_SIZE. This can be useful for benchmarking.  This is a per-IOAS
  *    option, the object_id must be the IOAS ID.
+ * @IOMMU_KEY_VAL_OPTION_VIOMMU:
+ *    Specifies key-value option for vIOMMU object. The caller must specify
+ *    vIOMMU ID for object_id. The allowed ops are set and get.
  */
 enum iommufd_option {
 	IOMMU_OPTION_RLIMIT_MODE = 0,
 	IOMMU_OPTION_HUGE_PAGES = 1,
+	IOMMU_OPTION_VIOMMU = 2,
 };
 
 /**
@@ -328,7 +332,7 @@ enum iommufd_option_ops {
  * @size: sizeof(struct iommu_option)
  * @option_id: One of enum iommufd_option
  * @op: One of enum iommufd_option_ops
- * @__reserved: Must be 0
+ * @key: Option key to match with the value
  * @object_id: ID of the object if required
  * @val64: Option value to set or value returned on get
  *
@@ -340,7 +344,7 @@ struct iommu_option {
 	__u32 size;
 	__u32 option_id;
 	__u16 op;
-	__u16 __reserved;
+	__u16 key;
 	__u32 object_id;
 	__aligned_u64 val64;
 };

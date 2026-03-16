@@ -61,42 +61,35 @@ static int amd_viommu_mmio_write(AMDVIState *s, __u32 offset,
                                  __u32 size, __u64 value)
 {
     int ret;
-    struct amd_viommu_mmio_data arg = {
+    struct iommu_option arg = {
         .size = sizeof(arg),
+        .option_id = IOMMU_OPTION_VIOMMU,
+        .op = IOMMU_OPTION_OP_SET,
     };
-    uint16_t bdf = PCI_BUILD_BDF((s->iommu.host.bus),
-				PCI_DEVFN(s->iommu.host.slot,
-					  s->iommu.host.function));
-    arg.iommu_devid = bdf;
-    arg.gid = s->gid;
-    arg.offset = offset;
-    arg.mmio_size = size;
-    arg.value = value;
-    arg.is_write = true;
 
-    return ret = ioctl(s->iommufd->fd, VIOMMU_MMIO_ACCESS, &arg);
+    arg.key = (__u16) offset;
+    arg.object_id = s->core->viommu_id;
+    arg.val64 = value;
+
+    return ret = ioctl(s->iommufd->fd, IOMMU_OPTION, &arg);
 }
 
 static int amd_viommu_mmio_read(AMDVIState *s, __u32 offset,
                                 __u32 size, __u64 *value)
 {
     int ret;
-    struct amd_viommu_mmio_data arg = {
+    struct iommu_option arg = {
         .size = sizeof(arg),
+        .option_id = IOMMU_OPTION_VIOMMU,
+        .op = IOMMU_OPTION_OP_GET,
     };
-    uint16_t bdf = PCI_BUILD_BDF((s->iommu.host.bus),
-				PCI_DEVFN(s->iommu.host.slot,
-					  s->iommu.host.function));
-    arg.iommu_devid = bdf;
-    arg.gid = s->gid;
-    arg.offset = offset;
-    arg.mmio_size = size;
-    arg.value = 0;
-    arg.is_write = false;
 
-    ret = ioctl(s->iommufd->fd, VIOMMU_MMIO_ACCESS, &arg);
-    if (!ret && value)
-        *value = arg.value;
+    arg.key = (__u16) offset;
+    arg.object_id = s->core->viommu_id;
+
+    return ret = ioctl(s->iommufd->fd, IOMMU_OPTION, &arg);
+
+    *value = arg.val64;
 
     return ret;
 }
