@@ -42,6 +42,7 @@
 #include "trace.h"
 #include "hw/i386/apic-msidef.h"
 #include "system/kvm_int.h"
+#include "system/kvm.h"
 
 #include "system/runstate.h"
 #include "system/iommufd.h"
@@ -915,6 +916,7 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
     s->iommufd_viommu_amd.iommu_devid = bdf;
     s->iommufd_viommu_amd.viommu_devid = viommu_devid;
     s->iommufd_viommu_amd.trans_devid = s->translate_id;
+    s->iommufd_viommu_amd.kvmfd = kvm_vmfd(kvm_state);
 
     s->core = iommufd_backend_alloc_viommu(s->iommufd,
                                            idev->devid,
