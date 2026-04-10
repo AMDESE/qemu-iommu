@@ -164,6 +164,7 @@
 #define AMDVI_FEATURE_GA                  (1ULL << 7) /* guest VAPIC support */
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
+#define AMDVI_FEATURE_VIOMMU              (1ULL << 55) /* vIOMMU */
 
 /* reserved DTE bits */
 #define AMDVI_DTE_LOWER_QUAD_RESERVED  0x80300000000000fc
@@ -183,6 +184,9 @@
         (AMDVI_FEATURE_PREFETCH | AMDVI_FEATURE_PPR | \
         AMDVI_FEATURE_IA | AMDVI_FEATURE_GT | AMDVI_FEATURE_HE | \
         AMDVI_GATS_MODE | AMDVI_HATS_MODE | AMDVI_FEATURE_GA)
+
+#define AMDVI_DEFAULT_EXCLUDE_FEATURES \
+	(AMDVI_FEATURE_PC | AMDVI_FEATURE_VIOMMU)
 
 /* capabilities header */
 #define AMDVI_CAPAB_FEATURES (AMDVI_CAPAB_FLAT_EXT | \
@@ -477,6 +481,15 @@ uint64_t amdvi_extended_feature_register(AMDVIState *s);
 #define TYPE_AMD_VIOMMU_PCI "AMD-VIOMMU-PCI"
 
 #define TYPE_AMD_VIOMMU_MEMORY_REGION "amd-viommu-memory-region"
+
+#define TYPE_AMD_SVIOMMU_DEVICE "amd-sviommu"
+#define AMD_SVIOMMU_DEVICE(obj)\
+    OBJECT_CHECK(AMDVIState, (obj), TYPE_AMD_SVIOMMU_DEVICE)
+
+#define TYPE_AMD_SVIOMMU_PCI "AMD-SVIOMMU-PCI"
+
+#define TYPE_AMD_SVIOMMU_MEMORY_REGION "amd-sviommu-memory-region"
+
 
 struct AMDVIAddressSpace {
     uint8_t bus_num;            /* bus number                           */
