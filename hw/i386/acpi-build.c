@@ -2264,9 +2264,8 @@ insert_viommu_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
     GArray *table_data = ivhd->blob;
     uint32_t entry;
 
-fprintf(stderr, "DEBUG: %s: %u: bus=%s(%#x), bus->parent_dev=%s, dev=%s, iommu_id=%#x, parent_iommu_id=%#x\n",
-	__func__, __LINE__, bus->qbus.name, pci_bus_num(bus),
-	bus->parent_dev? bus->parent_dev->name: "NULL", dev->name,
+fprintf(stderr, "DEBUG: %s: %u: bus=%s, bus->parent_dev=%s, dev=%s, iommu_id=%#x, parent_iommu_id=%#x\n",
+	__func__, __LINE__, bus->qbus.name, bus->parent_dev? bus->parent_dev->name: "NULL", dev->name,
 	ivhd->iommu_id, dev->parent_iommu_id);
 
     if (object_dynamic_cast(OBJECT(dev), TYPE_PCI_BRIDGE)) {
@@ -2505,6 +2504,7 @@ build_amd_iommu(GArray *table_data, AMDVIState *s,
     uint16_t bdf = PCI_BUILD_BDF((s->iommu.host.bus),
 				PCI_DEVFN(s->iommu.host.slot,
 					  s->iommu.host.function));
+    uint32_t entry;
 
 fprintf(stderr, "DEBUG0: %s: bdf=%#x, gid=%u, EFR:EFR2=%#08lx:%08lx\n",
 	__func__, bdf, s->gid, efr, efr2);
@@ -2532,12 +2532,19 @@ fprintf(stderr, "DEBUG0: %s: bdf=%#x, gid=%u, EFR:EFR2=%#08lx:%08lx\n",
                                    ivrs_host_bridges, &ivhd);
 
     if (!ivhd.blob->len) {
+        /* "Start of Range" IVHD entry, type 0x3 */
+        entry = PCI_BUILD_BDF(pci_bus_num(s->primary_bus), PCI_DEVFN(0, 0)) << 8 | 0x3;
+        build_append_int_noprefix(ivhd.blob, entry, 4);
+
+        /* "End of Range" IVHD entry, type 0x4 */
+        entry = PCI_BUILD_BDF(ivhd.last_bus_nr, PCI_DEVFN(31, 7)) << 8 | 0x4;
+        build_append_int_noprefix(ivhd.blob, entry, 4);
         /*
          *   Type 1 device entry reporting all devices
          *   These are 4-byte device entries currently reporting the range of
          *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
          */
-        build_append_int_noprefix(ivhd.blob, 0x0000001, 4);
+        //build_append_int_noprefix(ivhd.blob, 0x0000001, 4);
     }
 
     ivhd_table_len += ivhd.blob->len;
@@ -2665,9 +2672,15 @@ void build_ivrs(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
             s = AMD_VIOMMU_DEVICE(iommu);
 
-            efr = s->hwinfo.efr;
+            efr = s->hwinfo.efr & ~(AMDVI_DEFAULT_EXCLUDE_FEATURES);
             efr2 = s->hwinfo.efr2;
             attr = 0x1;	/* HATDis */
+        } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_SVIOMMU_DEVICE)) {
+            s = AMD_SVIOMMU_DEVICE(iommu);
+
+            efr = s->hwinfo.efr & ~(AMDVI_DEFAULT_EXCLUDE_FEATURES);
+            efr2 = s->hwinfo.efr2;
+            attr = 0x3;	/* HATDis and Secure vIOMMU */
         } else { /* Fix compilation error */
             continue;
         }
