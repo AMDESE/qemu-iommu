@@ -338,6 +338,8 @@ struct AMDIOMMUFDDevice {
     int passthrough_hwpt_id;
     HostIOMMUDevice *hiod;
     AMDVIState *iommu_state;
+    PCIBus *bus;
+    uint8_t devfn;
     QLIST_ENTRY(AMDIOMMUFDDevice) next;
 };
 
@@ -363,9 +365,11 @@ struct AMDVIState {
     PCIBus *primary_bus;
 
     int hwpt_cnt;		/* Track number of device attached to IOMMU */
+    int parent_hwpt_id;		/* Tracks per IOMMU parent domain ID */
     uint32_t version;
 
     void *vf_mmio_page;           /* MMIO mmap pointer */
+    void *mmio_page3;             /* Secure vIOMMU MMIO page3 mmap pointer */
     uint64_t immap_id;          /* Tracks the MMIO mmap ID that needs
 				   to be passed to mmap call */
 
@@ -413,6 +417,9 @@ struct AMDVIState {
     uint32_t pprlog_tail;        /* ppr log tail */
 
     MemoryRegion mr_mmio;        /* MMIO region */
+    MemoryRegion mr_mmio1;       /* 1st 8K for Secure HW-vIOMMU */
+    MemoryRegion mr_mmio3;       /* 3rd 4K for Secure HW-vIOMMU */
+    MemoryRegion mr_mmio4;       /* 4th 4K for Secure HW-vIOMMU */
     MemoryRegion mr_vf_mmio;       /* 3st 4K for HW-vIOMMU (VF MMIO) */
     MemoryRegion mr_vf_ctrl_mmio;  /* 1st 4K for HW-vIOMMU (VF CTRL MMIO) */
     MemoryRegion mr_sys;
