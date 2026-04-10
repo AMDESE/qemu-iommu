@@ -128,6 +128,11 @@ amd_viommu_dte(uint64_t offset_hi, uint64_t offset_lo, uint32_t size, uint64_t v
 amd_viommu_gcr3(uint64_t gcr3tbl, uint64_t gcr3tbl_va, uint64_t gcr3_0, uint64_t gcr3_0_va, uint16_t flags) "gcr3tbl=%#lx, gcr3tbl_va=%#lx, gcr3[0]=%#lx, gcr3[0]_va=%#lx, flags=%#x"
 amd_viommu_devtab_mmio(uint64_t val, uint64_t base, uint64_t len, uint16_t bus, uint16_t devfn) "val=%#lx, base=%#lx, len=%#lx, bus=%#x, devfn=%#x"
 
+# amd_sviommu.c
+amd_sviommu_init(uint32_t viommu_devid, uint32_t features, uint32_t hwpt_id) "svIOMMU init: vdevid=0x%x features=0x%x hwpt_id=0x%x"
+amd_sviommu_set_device(uint64_t efr, uint64_t efr2) "svIOMMU set device: efr=0x%"PRIx64" efr2=0x%"PRIx64
+amd_sviommu_msi_interrupt(uint32_t vcpu, uint32_t vector, uint64_t value) "svIOMMU MSI interrupt: vcpu=0x%x vector=0x%x MMIO[0x170]=0x%"PRIx64
+
 # vmmouse.c
 vmmouse_get_status(void) ""
 vmmouse_mouse_event(int x, int y, int dz, int buttons_state) "event: x=%d y=%d dz=%d state=%d"
