@@ -139,6 +139,12 @@ amd_viommu_update_gcr3(uint32_t dev_id, uint32_t nested_hwpt_id) "dev_id %u nest
 amd_viommu_attach_nested_hwpt(uint32_t dev_id, uint32_t old_hwpt_id, uint32_t new_hwpt_id, int ret) "dev_id %u old_hwpt_id %u new_hwpt_id %u ret %d"
 amd_viommu_reset_dev_hwpt(uint32_t dev_id, uint32_t pt_hwpt_id) "dev_id %u pt_hwpt_id %u"
 
+# amd_sviommu.c
+amd_sviommu_init(uint32_t viommu_devid, uint32_t features, uint32_t hwpt_id) "svIOMMU init: vdevid=0x%x features=0x%x hwpt_id=0x%x"
+amd_sviommu_set_device(uint64_t efr, uint64_t efr2) "svIOMMU set device: efr=0x%"PRIx64" efr2=0x%"PRIx64
+amd_sviommu_msi_interrupt(uint32_t vcpu, uint32_t vector) "svIOMMU MSI interrupt: vcpu=0x%x vector=0x%x"
+amd_sviommu_alloc_vdev(uint16_t gdevid, uint32_t vdev_id) "svIOMMU vDEVICE: gdevid=0x%x vdev_id %u"
+
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
 vmport_command(unsigned char command) "command: 0x%02x"
