@@ -166,6 +166,7 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_FEATURE_GA                  (1ULL << 7) /* guest VAPIC support */
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
+#define AMDVI_FEATURE_VIOMMU              (1ULL << 55) /* vIOMMU */
 
 #define AMDVI_FEATURE_GIO                 (1ULL << 48)
 #define AMDVI_FEATURE_EPHSUP              (1ULL << 50)

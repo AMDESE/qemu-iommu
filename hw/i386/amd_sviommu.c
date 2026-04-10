@@ -427,6 +427,17 @@ static uint64_t amd_sviommu_get_viommu_flags(void *opaque)
     return VIOMMU_FLAG_WANT_NESTING_PARENT;
 }
 
+static uint64_t amd_sviommu_extended_feature_register(X86IOMMUState *x86_iommu)
+{
+    AMDSVIOMMUState *s = AMD_SVIOMMU_DEVICE(x86_iommu);
+
+    if (!s->hwinfo) {
+        return 0;
+    }
+
+    return s->hwinfo->efr & ~(AMD_SVIOMMU_EXCLUDE_FEATURES);
+}
+
 static void amd_sviommu_state_change(AMDSVIOMMUState *s)
 {
     GHashTableIter as_it;
@@ -514,6 +525,8 @@ static void amd_sviommu_init(AMDSVIOMMUState *s)
                                                 amd_iommu_device_key_equal,
                                                 g_free, g_free);
     s->hwinfo = NULL;
+    s->ivrs_info.get_extended_feature_register =
+                                amd_sviommu_extended_feature_register;
     s->enabled = false;
     s->mmio_page3 = NULL;
 

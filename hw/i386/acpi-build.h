@@ -30,6 +30,7 @@ Object *acpi_get_i386_pci_host(void);
 #define AMD_IVHD_FEATURE_REPORT_HATS_SHIFT        (30)
 
 #define AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT        (0)
+#define AMD_IVHD_ATTRIBUTES_SVIOMMU_SHIFT       (1)
 
 #define AMD_IVHD_DEVICE_ENTRY_TYPE_RESERVED             (0)
 #define AMD_IVHD_DEVICE_ENTRY_TYPE_ALL                  (1)

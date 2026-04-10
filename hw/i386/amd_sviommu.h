@@ -28,6 +28,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(AMDSVIOMMUState, AMD_SVIOMMU_DEVICE)
         AMDVI_CAPAB_FLAG_HTTUNNEL |  AMDVI_CAPAB_EFR_SUP | \
         AMDVI_CAPAB_FLAG_NPCACHE)
 
+#define AMD_SVIOMMU_EXCLUDE_FEATURES \
+        (AMDVI_FEATURE_PC | AMDVI_FEATURE_VIOMMU)
+
 /*
  * In secure vIOMMU configurations only the third 4K page of the MMIO region
  * is accelerated. The 1st 8K and the 4th 4K are guest private memory.

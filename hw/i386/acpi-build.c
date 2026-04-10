@@ -73,6 +73,7 @@
 #include "qom/qom-qobject.h"
 #include "hw/i386/amd_iommu.h"
 #include "hw/i386/amd_viommu.h"
+#include "hw/i386/amd_sviommu.h"
 #include "hw/i386/intel_iommu.h"
 #include "hw/virtio/virtio-iommu.h"
 
@@ -2312,6 +2313,9 @@ static AMDIVRSInfo *amd_iommu_get_ivrs_info(X86IOMMUState *x86_iommu)
         } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
             AMDVIOMMUState *amd_viommu_s = AMD_VIOMMU_DEVICE(x86_iommu);
             return &amd_viommu_s->ivrs_info;
+        } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_SVIOMMU_DEVICE)) {
+            AMDSVIOMMUState *amd_sviommu_s = AMD_SVIOMMU_DEVICE(x86_iommu);
+            return &amd_sviommu_s->ivrs_info;
         }
         return NULL;
 }
@@ -2413,6 +2417,11 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         ivhd11.base_addr = ivrs_info->base_addr;
         ivhd11.iommu_attributes = !x86_iommu->dma_translation <<
                                   AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
+        if (object_dynamic_cast(OBJECT(x86_iommu), TYPE_AMD_SVIOMMU_DEVICE)) {
+            /* HATDis and Secure vIOMMU */
+            ivhd11.iommu_attributes = 1 << AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT |
+                                      1 << AMD_IVHD_ATTRIBUTES_SVIOMMU_SHIFT;
+        }
         ivhd11.efr = extended_feature;
         g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));
         /* IVHD entries as found above */
