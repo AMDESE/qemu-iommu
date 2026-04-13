@@ -233,7 +233,8 @@ bool vfio_devices_all_device_dirty_tracking(const VFIOContainerBase *bcontainer)
 
 static bool vfio_listener_skipped_section(MemoryRegionSection *section)
 {
-    return (!memory_region_is_ram(section->mr) &&
+    return memory_region_skip_vfio_dma(section->mr) ||
+           (!memory_region_is_ram(section->mr) &&
             !memory_region_is_iommu(section->mr)) ||
            memory_region_is_protected(section->mr) ||
            /*
