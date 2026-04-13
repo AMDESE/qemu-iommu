@@ -811,6 +811,11 @@ struct MemoryRegion {
 
     /* For devices designed to perform re-entrant IO into their own IO MRs */
     bool disable_reentrancy_guard;
+    /*
+     * When set, VFIO does not mirror this region into the device IOAS / legacy
+     * DMA map (RAM-like GPA that must not be exposed as DMA target).
+     */
+    bool skip_vfio_dma;
 };
 
 struct IOMMUMemoryRegion {
@@ -2426,6 +2431,23 @@ void memory_region_set_alias_offset(MemoryRegion *mr,
  * @unmergeable: whether to mark the #MemoryRegion unmergeable
  */
 void memory_region_set_unmergeable(MemoryRegion *mr, bool unmergeable);
+
+/**
+ * memory_region_set_skip_vfio_dma:
+ * @mr: the #MemoryRegion to update
+ * @skip: whether VFIO must ignore this region for IOAS / DMA mapping
+ *
+ * Intended for RAM or ram_device regions mapped at guest addresses that are
+ * not bus-master DMA targets (for example vIOMMU register windows backed by
+ * host mmap). Call before mapping the region into the guest address space if
+ * possible; toggling later does not remove an existing VFIO mapping.
+ */
+void memory_region_set_skip_vfio_dma(MemoryRegion *mr, bool skip);
+
+static inline bool memory_region_skip_vfio_dma(const MemoryRegion *mr)
+{
+    return mr->skip_vfio_dma;
+}
 
 /**
  * memory_region_present: checks if an address relative to a @container

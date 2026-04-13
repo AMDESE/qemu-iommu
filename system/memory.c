@@ -2790,6 +2790,11 @@ void memory_region_set_unmergeable(MemoryRegion *mr, bool unmergeable)
     memory_region_transaction_commit();
 }
 
+void memory_region_set_skip_vfio_dma(MemoryRegion *mr, bool skip)
+{
+    mr->skip_vfio_dma = skip;
+}
+
 uint64_t memory_region_get_alignment(const MemoryRegion *mr)
 {
     return mr->align;
