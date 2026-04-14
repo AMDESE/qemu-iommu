@@ -16,6 +16,7 @@
 #include <linux/iommufd.h>
 
 #include "hw/vfio/vfio-common.h"
+#include "hw/pci/pci_bus.h"
 #include "qemu/error-report.h"
 #include "trace.h"
 #include "qapi/error.h"
@@ -307,12 +308,14 @@ static bool viommu_present(VFIODevice *vbasedev)
     PCIBus *iommu_bus;
     PCIDevice *pdev;
     int devfn;
+    VFIOPCIDevice *vdev = container_of(vbasedev, VFIOPCIDevice, vbasedev);
 
     pdev = (PCIDevice *)vbasedev->dev;
     if (!pdev) {
         return false;
     }
-    pci_device_get_iommu_bus_devfn(pdev, &iommu_bus, &bus, &devfn);
+
+    pci_device_get_iommu_bus_devfn(&vdev->pdev, &iommu_bus, &bus, &devfn);
 
     return (iommu_bus && iommu_bus->iommu_ops &&
             iommu_bus->iommu_ops->set_iommu_device);
@@ -388,6 +391,8 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
             error_setg(errp, "failed to allocate a viommu");
             return false;
         }
+    } else {
+	    fprintf(stderr, "DEBUG %s : VIOMMU present\n", __func__);
     }
 
     hwpt = g_malloc0(sizeof(*hwpt));
@@ -862,26 +867,17 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
     VFIOPCIDevice *vfio_pci_dev = (VFIOPCIDevice *)
         object_dynamic_cast(OBJECT(vbasedev->dev), TYPE_VFIO_PCI);
     IOMMUFDBackend *iommufd = vbasedev->iommufd;
-    int ret;
 
-    if (!iommufd->vdevice && !idev->tdi_bound) {
-        iommufd->vdevice = iommufd_backend_alloc_vdev(idev, iommufd->viommu,
-                                                      pci_get_bdf(&vfio_pci_dev->pdev));
-        if (!iommufd->vdevice) {
+    if (!idev->vdevice && !idev->tdi_bound) {
+        idev->vdevice = iommufd_backend_alloc_vdev(idev, iommufd->viommu,
+						   pci_get_bdf(&vfio_pci_dev->pdev));
+        if (!idev->vdevice) {
             error_setg(errp, "failed to allocate a vdevice");
             return -1;
         }
     }
 
-    ret = iommufd_backend_tsm_bind(idev->iommufd->vdevice, kvmfd);
-
-    if (iommufd->vdevice && kvmfd == -1) {
-        iommufd_backend_free_id(iommufd, iommufd->vdevice->vdev_id);
-        g_free(iommufd->vdevice);
-        iommufd->vdevice = NULL;
-    }
-
-    return ret;
+    return iommufd_backend_tsm_bind(idev->vdevice, kvmfd);
 }
 
 static int iommufd_tsm_guest_request(VFIODevice *vbasedev,
@@ -892,12 +888,12 @@ static int iommufd_tsm_guest_request(VFIODevice *vbasedev,
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
     int ret = 0;
 
-    if (idev->iommufd->vdevice) {
-        ret = iommufd_backend_tsm_guest_request(idev->iommufd->vdevice,
+    if (idev->vdevice) {
+        ret = iommufd_backend_tsm_guest_request(idev->vdevice,
                                                 req, reqlen, rsp, rsplen,
                                                 fw_err);
     } else {
-        printf("+++Q+++ (%u) %s %u: iommufd_backend_free_id'ed\n", getpid(), __func__, __LINE__);
+        printf("+++Q+++ (%u) %s %u: iommufd vdevice not present\n", getpid(), __func__, __LINE__);
     }
 
     return ret;

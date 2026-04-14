@@ -410,6 +410,8 @@ struct IOMMUFDVdev *iommufd_backend_alloc_vdev(HostIOMMUDeviceIOMMUFD *idev,
         .virt_id = virt_id,
     };
 
+    fprintf(stderr, "DEBUG %s: virtid=0x%lx, out_id=0x%x\n",
+	    __func__, virt_id, alloc_vdev.out_vdevice_id);
     ret = ioctl(fd, IOMMU_VDEVICE_ALLOC, &alloc_vdev);
 
     trace_iommufd_backend_alloc_vdev(fd, idev->devid, viommu->viommu_id, virt_id,
@@ -437,7 +439,7 @@ int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
         .size = sizeof(b),
         .viommu_id = viommu->viommu_id,
         .dev_id = idev->devid,
-        .vdevice_id = viommu->iommufd->vdevice->vdev_id,
+        .vdevice_id = idev->vdevice->vdev_id,
         .kvmfd = kvmfd,
     };
 
@@ -445,10 +447,14 @@ int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
         return 0;
     }
 
+
+    fprintf(stderr, "DEBUG %s: devid=0x%x virt_id=0x%x\n",
+	    __func__, idev->vdevice->vdev_id, idev->devid);
+
     ret = ioctl(fd, IOMMU_VDEVICE_TSM_BIND, &b);
     if (ret < 0) {
         error_report("vfio: failed to bind TEE IO dev %X to CoCo VM: %d=%s",
-                     viommu->iommufd->vdevice->vdev_id, errno, strerror(errno));
+                     idev->vdevice->vdev_id, errno, strerror(errno));
         return ret;
     }
     idev->tdi_bound = kvmfd >= 0;
@@ -469,7 +475,7 @@ int iommufd_backend_tsm_guest_request(struct IOMMUFDVdev *vdev,
         .size = sizeof(gr),
         .viommu_id = viommu->viommu_id,
         .dev_id = idev->devid,
-        .vdevice_id = viommu->iommufd->vdevice->vdev_id,
+        .vdevice_id = idev->vdevice->vdev_id,
         .req = req,
         .rsp = rsp,
         .req_len = reqlen,
