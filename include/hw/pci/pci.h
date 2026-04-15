@@ -436,6 +436,10 @@ AddressSpace *pci_device_iommu_address_space(PCIDevice *dev);
 bool pci_device_set_iommu_device(PCIDevice *dev, HostIOMMUDevice *hiod,
                                  Error **errp);
 void pci_device_unset_iommu_device(PCIDevice *dev);
+void pci_device_get_iommu_bus_devfn(PCIDevice *dev,
+				    PCIBus **piommu_bus,
+				    PCIBus **aliased_bus,
+				    int *aliased_devfn);
 
 /**
  * pci_setup_iommu: Initialize specific IOMMU handlers for a PCIBus
