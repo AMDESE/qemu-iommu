@@ -235,8 +235,6 @@ static inline int kvm_update_guest_debug(CPUState *cpu, unsigned long reinject_t
 
 /* internal API */
 
-int kvm_vmfd(KVMState *s);
-
 int kvm_ioctl(KVMState *s, unsigned long type, ...);
 
 int kvm_vm_ioctl(KVMState *s, unsigned long type, ...);
@@ -479,6 +477,8 @@ int kvm_physical_memory_addr_from_host(KVMState *s, void *ram_addr,
                                        hwaddr *phys_addr);
 
 #endif /* COMPILING_PER_TARGET */
+
+int kvm_vmfd(KVMState *s);
 
 void kvm_cpu_synchronize_state(CPUState *cpu);
 

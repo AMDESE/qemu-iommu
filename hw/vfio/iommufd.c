@@ -22,6 +22,9 @@
 #include "system/iommufd.h"
 #include "hw/core/iommu.h"
 #include "hw/qdev-core.h"
+#include "hw/pci/pci.h"
+#include "hw/pci/pci_bus.h"
+#include "system/kvm.h"
 #include "system/reset.h"
 #include "qemu/cutils.h"
 #include "qemu/chardev_open.h"
@@ -301,6 +304,23 @@ static bool iommufd_cdev_pasid_detach_ioas_hwpt(VFIODevice *vbasedev,
     return true;
 }
 
+static bool viommu_present(VFIODevice *vbasedev)
+{
+    PCIBus *bus;
+    PCIBus *iommu_bus;
+    PCIDevice *pdev;
+    int devfn;
+
+    pdev = (PCIDevice *)vbasedev->dev;
+    if (!pdev) {
+        return false;
+    }
+    pci_device_get_iommu_bus_devfn(pdev, &iommu_bus, &bus, &devfn);
+
+    return (iommu_bus && iommu_bus->iommu_ops &&
+            iommu_bus->iommu_ops->set_iommu_device);
+}
+
 static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
                                          VFIOIOMMUFDContainer *container,
                                          Error **errp)
@@ -357,13 +377,18 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
         return false;
     }
 
-    if (vbasedev->tee_io) {
+    if (vbasedev->tee_io && !viommu_present(vbasedev)) {
+        struct iommu_viommu_amd iommufd_viommu_amd = { 0 };
         uint32_t viommu_id;
 
+        iommufd_viommu_amd.features = AMD_VIOMMU_FEATURE_SVIOMMU;
+        iommufd_viommu_amd.kvmfd = kvm_vmfd(kvm_state);
         if (!iommufd_backend_alloc_viommu(iommufd, vbasedev->devid,
-                                          IOMMU_VIOMMU_TYPE_AMD_TSM,
-                                          hwpt_id, NULL, 0, &viommu_id,
-                                          errp)) {
+                                          IOMMU_VIOMMU_TYPE_AMD,
+                                          hwpt_id,
+                                          &iommufd_viommu_amd,
+                                          sizeof(iommufd_viommu_amd),
+                                          &viommu_id, errp)) {
             return false;
         }
 
