@@ -2863,10 +2863,10 @@ static void pci_device_class_base_init(ObjectClass *klass, void *data)
  *
  * @aliased_devfn: return aliased devfn of the PCI device, optional.
  */
-static void pci_device_get_iommu_bus_devfn(PCIDevice *dev,
-                                           PCIBus **piommu_bus,
-                                           PCIBus **aliased_bus,
-                                           int *aliased_devfn)
+void pci_device_get_iommu_bus_devfn(PCIDevice *dev,
+				    PCIBus **piommu_bus,
+				    PCIBus **aliased_bus,
+				    int *aliased_devfn)
 {
     PCIBus *bus = pci_get_bus(dev);
     PCIBus *iommu_bus = bus;
