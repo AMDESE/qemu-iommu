@@ -864,7 +864,7 @@ static int iommufd_tsm_guest_request(VFIODevice *vbasedev,
                                      int *fw_err)
 {
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
-    int ret;
+    int ret = 0;
 
     if (idev->iommufd->vdevice) {
         ret = iommufd_backend_tsm_guest_request(idev->iommufd->vdevice,
