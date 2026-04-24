@@ -1405,7 +1405,7 @@ struct iommu_vdevice_tsm_bind {
 	__u32 vdevice_id;
 	__s32 kvmfd;
 	__u32 pad;
-} __packed;
+} __attribute__((packed));
 #define IOMMU_VDEVICE_TSM_BIND _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VDEVICE_TSM_BIND)
 
 #define IOMMU_VDEVICE_TSM_GUEST_REQUEST_RUN	BIT(0)
@@ -1426,7 +1426,7 @@ struct iommu_vdevice_tsm_guest_request {
 	__u32 req_len;
 	__u32 scope; // IOMMU_VDEVICE_TSM_SCOPE_...
 	__s32 fw_err;
-} __packed;
+} __attribute__((packed));
 #define IOMMU_VDEVICE_TSM_GUEST_REQUEST _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VDEVICE_TSM_GUEST_REQUEST)
 
 #endif
