@@ -1807,6 +1807,32 @@ static void vfio_bars_register(VFIOPCIDevice *vdev)
     }
 }
 
+/*
+ * Must be called AFTER vfio_add_capabilities() so that vdev->has_tee_io
+ * has been populated by vfio_check_pcie_tee_io().
+ */
+static void vfio_bars_setup_tee_io(VFIOPCIDevice *vdev)
+{
+    int i, j;
+
+    if (!vdev->vbasedev.tee_io || !vdev->has_tee_io) {
+        return;
+    }
+
+    for (i = 0; i < PCI_ROM_SLOT; i++) {
+        VFIOBAR *bar = &vdev->bars[i];
+        VFIORegion *region = &bar->region;
+
+        if (!region->size || !region->nr_mmaps) {
+            continue;
+        }
+
+        for (j = 0; j < region->nr_mmaps; j++) {
+            vfio_region_mmap_tee(region, j);
+        }
+    }
+}
+
 static void vfio_bars_exit(VFIOPCIDevice *vdev)
 {
     int i;
@@ -3156,6 +3182,12 @@ static void vfio_realize(PCIDevice *pdev, Error **errp)
     if (!vfio_add_capabilities(vdev, errp)) {
         goto out_unset_idev;
     }
+
+    /*
+     * has_tee_io is set during vfio_add_capabilities(); set up the dma_buf
+     * guest_memfd for each BAR mmap only now that the flag is valid.
+     */
+    vfio_bars_setup_tee_io(vdev);
 
     if (!vfio_config_quirk_setup(vdev, errp)) {
         goto out_unset_idev;
