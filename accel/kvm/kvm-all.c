@@ -3464,6 +3464,14 @@ int kvm_cpu_exec(CPUState *cpu)
                 bql_unlock();
                 ret = 0;
                 break;
+            case KVM_SYSTEM_EVENT_SEV_TERM:
+                /*
+                 * SNP guest requested termination via GHCB TERM_REQUEST.
+                 * Treat as a guest-initiated shutdown.
+                 */
+                qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+                ret = EXCP_INTERRUPT;
+                break;
             default:
                 ret = kvm_arch_handle_exit(cpu, run);
                 break;
