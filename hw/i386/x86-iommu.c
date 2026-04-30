@@ -27,6 +27,10 @@
 #include "trace.h"
 #include "system/kvm.h"
 #include "hw/pci/pci_bus.h"
+#include "amd_iommu.h"
+
+unsigned int x86_iommu_count;
+struct X86IOMMUList x86_iommu_list;
 
 void x86_iommu_iec_register_notifier(X86IOMMUState *iommu,
                                      iec_notify_fn fn, void *data)
@@ -89,6 +93,26 @@ X86IOMMUState *x86_iommu_get_default(void)
         return X86_IOMMU_DEVICE(pcms->iommu);
     }
     return NULL;
+}
+
+X86IOMMUList *x86_iommu_get_list_head(void)
+{
+    return &x86_iommu_list;
+}
+
+void x86_iommu_add(DeviceState *dev, Error **errp)
+{
+    X86IOMMUState *x86_iommu;
+
+    if (!QLIST_EMPTY(&x86_iommu_list)) {
+        error_setg(errp, "QEMU does not support multiple vIOMMUs "
+                    "for x86 yet.");
+        return;
+    }
+
+    x86_iommu = X86_IOMMU_DEVICE(dev);
+    QLIST_INSERT_HEAD(&x86_iommu_list, x86_iommu, next);
+    x86_iommu->index = x86_iommu_count++;
 }
 
 X86IOMMUState *x86_iommu_device_get(PCIDevice *dev)
