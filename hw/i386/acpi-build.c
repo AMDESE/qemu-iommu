@@ -1555,7 +1555,7 @@ build_dmar_q35(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     /* Root complex IOAPIC uses one path only */
     const size_t ioapic_scope_size = 6 /* device scope structure */ +
                                      2 /* 1 path entry */;
-    X86IOMMUState *iommu = x86_iommu_get_default();
+    X86IOMMUState *iommu = QLIST_FIRST(x86_iommu_get_list_head());
     IntelIOMMUState *intel_iommu = INTEL_IOMMU_DEVICE(iommu);
     GArray *scope_blob = g_array_new(false, true, 1);
 
@@ -1787,7 +1787,8 @@ static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
 {
-    AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu_get_default());
+    X86IOMMUState *x86_iommu = QLIST_FIRST(x86_iommu_get_list_head());
+    AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
     PCIDevice *iommu_dev = &(s->pci->dev);
     GArray *ivhd_blob = g_array_new(false, true, 1);
     X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
@@ -1918,7 +1919,9 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
 {
     PCMachineState *pcms = PC_MACHINE(machine);
     X86MachineState *x86ms = X86_MACHINE(machine);
-    DeviceState *iommu = pcms->iommu;
+    struct X86IOMMUList *x86_iommus = x86_iommu_get_list_head();
+    struct X86IOMMUState *x86_iommu;
+    DeviceState *iommu;
     GArray *table_offsets;
     unsigned facs, dsdt, rsdt;
     AcpiPmInfo pm;
@@ -2045,6 +2048,15 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
         build_mcfg(tables_blob, tables->linker, &mcfg, x86ms->oem_id,
                    x86ms->oem_table_id);
     }
+
+    /* All IOMMUs in the list are of same type hence use first one to determine
+     * list
+     */
+    if (!x86_iommus || QLIST_EMPTY(x86_iommus))
+        goto skip_iommus;
+
+    x86_iommu = QLIST_FIRST(x86_iommus);
+    iommu = DEVICE(&x86_iommu->busdev);
     if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
         acpi_add_table(table_offsets, tables_blob);
         build_amd_iommu(tables_blob, tables->linker, x86ms->oem_id,
@@ -2060,6 +2072,8 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
         build_viot(machine, tables_blob, tables->linker, pci_get_bdf(pdev),
                    x86ms->oem_id, x86ms->oem_table_id);
     }
+
+skip_iommus:
     if (machine->nvdimms_state->is_enabled) {
         nvdimm_build_acpi(table_offsets, tables_blob, tables->linker,
                           machine->nvdimms_state, machine->ram_slots,
