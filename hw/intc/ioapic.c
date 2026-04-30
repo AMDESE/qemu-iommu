@@ -438,15 +438,13 @@ static void ioapic_machine_done_notify(Notifier *notifier, void *data)
     IOAPICCommonState *s = container_of(notifier, IOAPICCommonState,
                                         machine_done);
     X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
+    X86IOMMUState *iommu = x86ms->ioapic_iommu;
 
-    if (accel_irqchip_is_split() && x86ms->ioapic_as != &address_space_memory) {
-        X86IOMMUState *iommu = x86_iommu_get_default();
-        if (iommu) {
-            /* Register this IOAPIC with IOMMU IEC notifier, so that
-             * when there are IR invalidates, we can be notified to
-             * update kernel IR cache. */
-            x86_iommu_iec_register_notifier(iommu, ioapic_iec_notifier, s);
-        }
+    if (accel_irqchip_is_split() && iommu) {
+        /* Register this IOAPIC with IOMMU IEC notifier, so that
+         * when there are IR invalidates, we can be notified to
+         * update kernel IR cache. */
+        x86_iommu_iec_register_notifier(iommu, ioapic_iec_notifier, s);
     }
 #endif
 }

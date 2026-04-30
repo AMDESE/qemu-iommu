@@ -26,6 +26,7 @@
 #include "hw/isa/isa.h"
 #include "qom/object.h"
 #include "system/igvm-cfg.h"
+#include "hw/i386/x86-iommu.h"
 
 struct X86MachineClass {
     MachineClass parent;
@@ -86,6 +87,9 @@ struct X86MachineState {
      * will be translated to MSI messages in the address space.
      */
     AddressSpace *ioapic_as;
+
+    /* IOMMU used by IOAPIC */
+    X86IOMMUState *ioapic_iommu;
 
     /*
      * Ratelimit enforced on detected bus locks in guest.
