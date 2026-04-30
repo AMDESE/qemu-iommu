@@ -241,6 +241,9 @@
 
 /* AMDVI default address */
 #define AMDVI_BASE_ADDR 0xfed80000ULL
+#define AMDVI_GET_BASE_ADDR(index) \
+        (AMDVI_BASE_ADDR + ((index) * AMDVI_MMIO_SIZE))
+
 
 /* page management constants */
 #define AMDVI_PAGE_SHIFT 12
