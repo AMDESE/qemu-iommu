@@ -1752,7 +1752,10 @@ select_devices:
     pci_for_each_device_under_bus(bus, insert_ivhd, table_data);
 
     QLIST_FOREACH(child_bus, &bus->child, sibling) {
-        add_ivhd_entries_from_bus(child_bus, table_data);
+        /* In case of multiple IOMMUs, Child bus can have a separate iommu */
+        if (!child_bus->iommu_ops) {
+            add_ivhd_entries_from_bus(child_bus, table_data);
+        }
     }
 }
 
@@ -1787,19 +1790,12 @@ static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
 {
-    X86IOMMUState *x86_iommu = QLIST_FIRST(x86_iommu_get_list_head());
-    AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
-    PCIDevice *iommu_dev = &(s->pci->dev);
-    GArray *ivhd_blob = g_array_new(false, true, 1);
-    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+    X86IOMMUList *x86_iommu_list = x86_iommu_get_list_head();
+    X86IOMMUState *x86_iommu;
     X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
     AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
-    int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
-    uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
     AmdIvrsVendorHdr ivrs_hdr = {};
-    AmdIvhdHdr10 ivhd10 = {};
-    AmdIvhdHdr11 ivhd11 = {};
 
     acpi_table_begin(&table, table_data);
     /* IVinfo - IO virtualization information common to all
@@ -1817,63 +1813,73 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * blob further below.  Fall back to an entry covering all devices, which
      * is sufficient when no aliases are present.
      */
-    assert(s->root_bus);
-    add_ivhd_entries_from_bus(s->root_bus, ivhd_blob);
+    QLIST_FOREACH(x86_iommu, x86_iommu_list, next) {
+        AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
+        GArray *ivhd_blob = g_array_new(false, true, 1);
+        PCIDevice *iommu_dev = &(s->pci->dev);
+        int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
+        uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
+        AmdIvhdHdr10 ivhd10 = {};
+        AmdIvhdHdr11 ivhd11 = {};
 
-    if (!ivhd_blob->len) {
+        assert(s->root_bus);
+        add_ivhd_entries_from_bus(s->root_bus, ivhd_blob);
+
+        if (!ivhd_blob->len) {
+            /*
+             *   Type 1 device entry reporting all devices
+             *   These are 4-byte device entries currently reporting the range of
+             *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
+             */
+            AmdIvhdDeviceEntry entry = { .type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALL };
+            g_array_append_vals(ivhd_blob, &entry, sizeof(entry));
+        }
+
         /*
-         *   Type 1 device entry reporting all devices
-         *   These are 4-byte device entries currently reporting the range of
-         *   Refer to Spec - Table 95:IVHD Device Entry Type Codes(4-byte)
+         * When interrupt remapping is supported, we add a special IVHD device
+         * for type IO-APIC
+         * Refer to spec - Table 95: IVHD device entry type codes
+         *
+         * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
+         * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
          */
-        AmdIvhdDeviceEntry entry = { .type = AMD_IVHD_DEVICE_ENTRY_TYPE_ALL };
-        g_array_append_vals(ivhd_blob, &entry, sizeof(entry));
+        if (x86ms->ioapic_iommu == x86_iommu) {
+            AmdIvhdDeviceEntryExt entry_ext = {
+                        .type = AMD_IVHD_DEVICE_ENTRY_TYPE_SPECIAL_DEVICE,
+                        .devid_b = IOAPIC_SB_DEVID,
+                        .varity = IVHD_VARIETY_IOAPIC
+                    };
+
+            g_array_append_vals(ivhd_blob, &entry_ext, sizeof(entry_ext));
+        }
+
+        ivhd10.type = 0x10;
+        ivhd10.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP |
+                       AMD_IVHD_FLAG_PREF_SUP  | AMD_IVHD_FLAG_PPR_SUP;
+        ivhd10.length = ivhd_blob->len + sizeof(ivhd10);
+        ivhd10.devid = iommu_devid;
+        ivhd10.capab_offset = s->pci->capab_offset;
+        ivhd10.base_addr = s->mr_mmio.addr;
+        ivhd10.iommu_feature_report = get_amd_ivhd_feature_report(s);
+        g_array_append_vals(table_data, &ivhd10, sizeof(ivhd10));
+        /* IVHD entries as found above */
+        g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
+
+        ivhd11.type = 0x11;
+        ivhd11.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP;
+        ivhd11.length = ivhd_blob->len + sizeof(ivhd11);
+        ivhd11.devid = iommu_devid;
+        ivhd11.capab_offset = s->pci->capab_offset;
+        ivhd11.base_addr = s->mr_mmio.addr;
+        ivhd11.iommu_attributes = !s->iommu.dma_translation <<
+                                  AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
+        ivhd11.efr = amdvi_extended_feature_register(s);
+        g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));
+        /* IVHD entries as found above */
+        g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
+
+        g_array_free(ivhd_blob, TRUE);
     }
-
-    /*
-     * When interrupt remapping is supported, we add a special IVHD device
-     * for type IO-APIC
-     * Refer to spec - Table 95: IVHD device entry type codes
-     *
-     * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
-     * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
-     */
-    if (x86ms->ioapic_iommu == x86_iommu) {
-        AmdIvhdDeviceEntryExt entry_ext = {
-                    .type = AMD_IVHD_DEVICE_ENTRY_TYPE_SPECIAL_DEVICE,
-                    .devid_b = IOAPIC_SB_DEVID,
-                    .varity = IVHD_VARIETY_IOAPIC
-                };
-
-        g_array_append_vals(ivhd_blob, &entry_ext, sizeof(entry_ext));
-    }
-
-    ivhd10.type = 0x10;
-    ivhd10.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP |
-                   AMD_IVHD_FLAG_PREF_SUP  | AMD_IVHD_FLAG_PPR_SUP;
-    ivhd10.length = ivhd_blob->len + sizeof(ivhd10);
-    ivhd10.devid = iommu_devid;
-    ivhd10.capab_offset = s->pci->capab_offset;
-    ivhd10.base_addr = s->mr_mmio.addr;
-    ivhd10.iommu_feature_report = get_amd_ivhd_feature_report(s);
-    g_array_append_vals(table_data, &ivhd10, sizeof(ivhd10));
-    /* IVHD entries as found above */
-    g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
-
-    ivhd11.type = 0x11;
-    ivhd11.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP;
-    ivhd11.length = ivhd_blob->len + sizeof(ivhd11);
-    ivhd11.devid = iommu_devid;
-    ivhd11.capab_offset = s->pci->capab_offset;
-    ivhd11.base_addr = s->mr_mmio.addr;
-    ivhd11.iommu_attributes = !s->iommu.dma_translation <<
-                              AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
-    ivhd11.efr = amdvi_extended_feature_register(s);
-    g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));
-    /* IVHD entries as found above */
-    g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
-
-    g_array_free(ivhd_blob, TRUE);
     acpi_table_end(linker, &table);
 }
 

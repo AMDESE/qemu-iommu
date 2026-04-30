@@ -2451,10 +2451,6 @@ static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
 
     /* reset AMDVI specific capabilities, all r/o */
     pci_set_long(pdev->config + s->capab_offset, AMDVI_CAPAB_FEATURES);
-    pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_BAR_LOW,
-                 AMDVI_BASE_ADDR & MAKE_64BIT_MASK(14, 18));
-    pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_BAR_HIGH,
-                AMDVI_BASE_ADDR >> 32);
     pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_RANGE,
                  0xff000000);
     pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_MISC, 0);
@@ -2574,6 +2570,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     X86MachineState *x86ms = X86_MACHINE(ms);
     X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
     PCIBus *iommu_bus;
+    uint64_t base_addr;
 
     if (s->pci_id) {
         PCIDevice *pdev = NULL;
@@ -2601,6 +2598,14 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index);
+
+    /* Set up PCI Capability base address */
+    pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_LOW,
+                 base_addr & MAKE_64BIT_MASK(14, 18));
+    pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_HIGH,
+                base_addr >> 32);
+
     s->root_bus = get_root_bus(iommu_bus);
 
     s->iotlb = g_hash_table_new_full(amdvi_iotlb_hash,
@@ -2612,7 +2617,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     /* set up MMIO */
     memory_region_init_io(&s->mr_mmio, OBJECT(s), &mmio_mem_ops, s,
                           "amdvi-mmio", AMDVI_MMIO_SIZE);
-    memory_region_add_subregion(get_system_memory(), AMDVI_BASE_ADDR,
+    memory_region_add_subregion(get_system_memory(), base_addr,
                                 &s->mr_mmio);
 
     /* Create the share memory regions by all devices */
@@ -2637,7 +2642,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
      * AMD IOMMU IVRS, hence create a ioapic_as with root bus even though AMD
      * IOMMU is not serving devices attached to root bus.
      */
-    if (x86_iommu_ir_supported(X86_IOMMU_DEVICE(s))) {
+    if (!x86ms->ioapic_iommu && x86_iommu_ir_supported(X86_IOMMU_DEVICE(s))) {
         x86ms->ioapic_as = amdvi_host_dma_iommu(pcms->pcibus, s,
                                                 AMDVI_IOAPIC_SB_DEVID);
         x86ms->ioapic_iommu = x86_iommu;
