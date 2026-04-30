@@ -135,12 +135,6 @@ struct X86IOMMU_MSIMessage {
 QLIST_HEAD(X86IOMMUList, X86IOMMUState);
 
 /**
- * x86_iommu_get_default - get default IOMMU device
- * @return: pointer to default IOMMU device
- */
-X86IOMMUState *x86_iommu_get_default(void);
-
-/**
  * x86_iommu_get_list_head - get IOMMU list
  * @return: pointer to default IOMMU list head
  */

@@ -82,19 +82,6 @@ void x86_iommu_irq_to_msi_message(X86IOMMUIrq *irq, MSIMessage *msg_out)
     msg_out->data = msg.msi_data;
 }
 
-X86IOMMUState *x86_iommu_get_default(void)
-{
-    MachineState *ms = MACHINE(qdev_get_machine());
-    PCMachineState *pcms =
-        PC_MACHINE(object_dynamic_cast(OBJECT(ms), TYPE_PC_MACHINE));
-
-    if (pcms &&
-        object_dynamic_cast(OBJECT(pcms->iommu), TYPE_X86_IOMMU_DEVICE)) {
-        return X86_IOMMU_DEVICE(pcms->iommu);
-    }
-    return NULL;
-}
-
 X86IOMMUList *x86_iommu_get_list_head(void)
 {
     return &x86_iommu_list;
