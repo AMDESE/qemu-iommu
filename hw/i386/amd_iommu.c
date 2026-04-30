@@ -2572,6 +2572,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     MachineState *ms = MACHINE(qdev_get_machine());
     PCMachineState *pcms = PC_MACHINE(ms);
     X86MachineState *x86ms = X86_MACHINE(ms);
+    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
     PCIBus *iommu_bus;
 
     if (s->pci_id) {
@@ -2639,6 +2640,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     if (x86_iommu_ir_supported(X86_IOMMU_DEVICE(s))) {
         x86ms->ioapic_as = amdvi_host_dma_iommu(pcms->pcibus, s,
                                                 AMDVI_IOAPIC_SB_DEVID);
+        x86ms->ioapic_iommu = x86_iommu;
     }
 
     if (kvm_enabled() && x86ms->apic_id_limit > 255 && !s->xtsup) {

@@ -1790,6 +1790,8 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
     AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu_get_default());
     PCIDevice *iommu_dev = &(s->pci->dev);
     GArray *ivhd_blob = g_array_new(false, true, 1);
+    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+    X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
     AcpiTable table = { .sig = "IVRS", .rev = 1, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
     int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
@@ -1835,7 +1837,7 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * Linux IOMMU driver checks for the special IVHD device (type IO-APIC).
      * See Linux kernel commit 'c2ff5cf5294bcbd7fa50f7d860e90a66db7e5059'
      */
-    if (x86_iommu_ir_supported(x86_iommu_get_default())) {
+    if (x86ms->ioapic_iommu == x86_iommu) {
         AmdIvhdDeviceEntryExt entry_ext = {
                     .type = AMD_IVHD_DEVICE_ENTRY_TYPE_SPECIAL_DEVICE,
                     .devid_b = IOAPIC_SB_DEVID,

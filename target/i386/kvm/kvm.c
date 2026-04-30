@@ -6433,7 +6433,7 @@ int kvm_arch_fixup_msi_route(struct kvm_irq_routing_entry *route,
     if (dev) {
         iommu = x86_iommu_device_get(dev);
     } else if (x86ms->ioapic_as != &address_space_memory) {
-        iommu = x86_iommu_get_default();
+        iommu = x86ms->ioapic_iommu;
     }
 
     if (iommu) {
