@@ -41,3 +41,12 @@ bool x86_iommu_ir_supported(X86IOMMUState *s)
 {
     return false;
 }
+
+X86IOMMUList *x86_iommu_get_list_head(void)
+{
+    return NULL;
+}
+
+void x86_iommu_add(DeviceState *dev, Error **errp)
+{
+}
