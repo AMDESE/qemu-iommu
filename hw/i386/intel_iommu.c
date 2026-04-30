@@ -4866,6 +4866,7 @@ static void vtd_realize(DeviceState *dev, Error **errp)
     /* Pseudo address space under root PCI bus. */
     x86ms->ioapic_as = vtd_host_dma_iommu(bus, s, Q35_PSEUDO_DEVFN_IOAPIC);
     qemu_add_machine_init_done_notifier(&vtd_machine_done_notify);
+    x86ms->ioapic_iommu = X86_IOMMU_DEVICE(dev);
 }
 
 static void vtd_class_init(ObjectClass *klass, void *data)
