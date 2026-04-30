@@ -31,6 +31,7 @@ OBJECT_DECLARE_TYPE(X86IOMMUState, X86IOMMUClass, X86_IOMMU_DEVICE)
 
 typedef struct X86IOMMUIrq X86IOMMUIrq;
 typedef struct X86IOMMU_MSIMessage X86IOMMU_MSIMessage;
+typedef struct X86IOMMUList X86IOMMUList;
 
 struct X86IOMMUClass {
     SysBusDeviceClass parent;
@@ -66,6 +67,8 @@ struct X86IOMMUState {
     bool pt_supported;          /* Whether vIOMMU supports pass-through */
     bool dma_translation;       /* Whether vIOMMU supports DMA translation */
     QLIST_HEAD(, IEC_Notifier) iec_notifiers; /* IEC notify list */
+    unsigned int index;
+    QLIST_ENTRY(X86IOMMUState) next;
 };
 
 bool x86_iommu_ir_supported(X86IOMMUState *s);
@@ -129,11 +132,26 @@ struct X86IOMMU_MSIMessage {
     };
 };
 
+QLIST_HEAD(X86IOMMUList, X86IOMMUState);
+
 /**
  * x86_iommu_get_default - get default IOMMU device
  * @return: pointer to default IOMMU device
  */
 X86IOMMUState *x86_iommu_get_default(void);
+
+/**
+ * x86_iommu_get_list_head - get IOMMU list
+ * @return: pointer to default IOMMU list head
+ */
+X86IOMMUList *x86_iommu_get_list_head(void);
+
+/**
+ * x86_iommu_add - Add IOMMU to the IOMMU list
+ * @dev: Device state of the IOMMU
+ * @return: 0 if success, < 0 if failure
+ */
+void x86_iommu_add(DeviceState *dev, Error **errp);
 
 /**
  * x86_iommu_device_get - get IOMMU device for given PCI device
