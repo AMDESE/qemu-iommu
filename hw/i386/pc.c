@@ -1416,14 +1416,7 @@ static void pc_machine_device_pre_plug_cb(HotplugHandler *hotplug_dev,
 
     if (object_dynamic_cast(OBJECT(dev), TYPE_X86_IOMMU_DEVICE) ||
         object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_IOMMU_PCI)) {
-        PCMachineState *pcms = PC_MACHINE(hotplug_dev);
-
-        if (pcms->iommu) {
-            error_setg(errp, "QEMU does not support multiple vIOMMUs "
-                       "for x86 yet.");
-            return;
-        }
-        pcms->iommu = dev;
+        x86_iommu_add(dev, errp);
     } else if (object_dynamic_cast(OBJECT(dev), TYPE_HV_BALLOON)) {
         pc_hv_balloon_pre_plug(hotplug_dev, dev, errp);
     }
@@ -1746,7 +1739,7 @@ static void pc_machine_wakeup(MachineState *machine)
 
 static bool pc_hotplug_allowed(MachineState *ms, DeviceState *dev, Error **errp)
 {
-    X86IOMMUState *iommu = x86_iommu_get_default();
+    X86IOMMUState *iommu = QLIST_FIRST(x86_iommu_get_list_head());
     IntelIOMMUState *intel_iommu;
 
     if (iommu &&

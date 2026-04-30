@@ -4787,7 +4787,7 @@ static bool vtd_decide_config(IntelIOMMUState *s, Error **errp)
 
 static int vtd_machine_done_notify_one(Object *child, void *unused)
 {
-    IntelIOMMUState *iommu = INTEL_IOMMU_DEVICE(x86_iommu_get_default());
+    IntelIOMMUState *iommu = INTEL_IOMMU_DEVICE(QLIST_FIRST(x86_iommu_get_list_head()));
 
     /*
      * We hard-coded here because vfio-pci is the only special case
