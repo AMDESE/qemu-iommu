@@ -91,9 +91,10 @@ void x86_iommu_add(DeviceState *dev, Error **errp)
 {
     X86IOMMUState *x86_iommu;
 
-    if (!QLIST_EMPTY(&x86_iommu_list)) {
+    if (!object_dynamic_cast(OBJECT(dev), TYPE_AMD_IOMMU_DEVICE) &&
+        !QLIST_EMPTY(&x86_iommu_list)) {
         error_setg(errp, "QEMU does not support multiple vIOMMUs "
-                    "for x86 yet.");
+                    "for Intel and Virtio yet.");
         return;
     }
 
