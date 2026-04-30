@@ -5666,6 +5666,7 @@ static void vtd_realize(DeviceState *dev, Error **errp)
     pci_setup_iommu(bus, &vtd_iommu_ops, dev);
     /* Pseudo address space under root PCI bus. */
     x86ms->ioapic_as = vtd_host_dma_iommu(bus, s, Q35_PSEUDO_DEVFN_IOAPIC);
+    x86ms->ioapic_iommu = X86_IOMMU_DEVICE(dev);
 }
 
 static void vtd_class_init(ObjectClass *klass, const void *data)
