@@ -657,7 +657,14 @@ DeviceState *qdev_device_add_from_qdict(const QDict *opts,
             return NULL;
         }
     } else if (dc->bus_type != NULL) {
-        bus = qbus_find_recursive(sysbus_get_default(), NULL, dc->bus_type);
+        if (!strcmp(dc->bus_type, "PCI")) {
+            /* Prefer main host bridge bus so ad-hoc PCI buses (e.g. pxb) are not
+             * picked first when the user omits the "bus" property. */
+            bus = qbus_find_recursive(sysbus_get_default(), "pcie.0", dc->bus_type);
+        }
+        if (!bus || qbus_is_full(bus)) {
+            bus = qbus_find_recursive(sysbus_get_default(), NULL, dc->bus_type);
+        }
         if (!bus || qbus_is_full(bus)) {
             error_setg(errp, "No '%s' bus found for device '%s'",
                        dc->bus_type, driver);
