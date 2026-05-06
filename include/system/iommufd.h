@@ -50,6 +50,11 @@ typedef struct IOMMUFDVeventq {
     uint32_t veventq_fd;
 } IOMMUFDVeventq;
 
+typedef struct IOMMUFDVcmdq {
+    IOMMUFDViommu *viommu;
+    uint32_t vcmdq_id;
+} IOMMUFDVcmdq;
+
 bool iommufd_backend_connect(IOMMUFDBackend *be, Error **errp);
 void iommufd_backend_disconnect(IOMMUFDBackend *be);
 
@@ -84,7 +89,9 @@ bool iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t id,
 IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
                                             uint32_t dev_id,
                                             uint32_t viommu_type,
-                                            uint32_t hwpt_id);
+                                            uint32_t hwpt_id,
+                                            uint32_t data_len,
+                                            void *data_uptr);
 
 bool iommufd_change_process_capable(IOMMUFDBackend *be);
 bool iommufd_change_process(IOMMUFDBackend *be, Error **errp);
@@ -153,6 +160,15 @@ bool iommufd_viommu_invalidate_cache(IOMMUFDBackend *be, uint32_t viommu_id,
 IOMMUFDVeventq *iommufd_viommu_alloc_eventq(IOMMUFDViommu *viommu,
                                            uint32_t type,
                                            uint32_t depth);
+IOMMUFDVcmdq *iommufd_viommu_alloc_cmdq(IOMMUFDViommu *viommu,
+                                        uint32_t type,
+                                        uint32_t index,
+                                        uint64_t nesting_parent_iova,
+                                        uint64_t length);
+void *iommufd_viommu_get_shared_page(IOMMUFDViommu *viommu,
+                                     uint32_t size, bool readonly);
+void iommufd_viommu_put_shared_page(IOMMUFDViommu *viommu,
+                                    void *page, uint32_t size);
 
 bool host_iommu_device_iommufd_attach_hwpt(HostIOMMUDeviceIOMMUFD *idev,
                                            uint32_t hwpt_id, Error **errp);
