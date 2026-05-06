@@ -140,6 +140,10 @@ typedef struct IOMMUFDVdev {
 IOMMUFDVdev *iommufd_backend_alloc_vdev(HostIOMMUDeviceIOMMUFD *idev,
                                         IOMMUFDViommu *viommu,
                                         uint64_t virt_id);
+bool iommufd_viommu_invalidate_cache(IOMMUFDBackend *be, uint32_t viommu_id,
+                                     uint32_t data_type, uint32_t entry_len,
+                                     uint32_t *entry_num, void *data,
+                                     Error **errp);
 
 bool host_iommu_device_iommufd_attach_hwpt(HostIOMMUDeviceIOMMUFD *idev,
                                            uint32_t hwpt_id, Error **errp);
