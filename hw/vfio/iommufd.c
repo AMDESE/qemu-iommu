@@ -963,6 +963,8 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
     case IOMMU_HW_INFO_TYPE_INTEL_VTD:
         caps->nesting = !!(vendor_caps->vtd.ecap_reg & VTD_ECAP_NEST);
         caps->fs1gp = !!(vendor_caps->vtd.cap_reg & VTD_CAP_FS1GP);
+        caps->errata = vendor_caps->vtd.flags &
+            IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
         break;
     case IOMMU_HW_INFO_TYPE_ARM_SMMUV3:
     case IOMMU_HW_INFO_TYPE_NONE:
