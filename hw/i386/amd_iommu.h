@@ -24,6 +24,8 @@
 #include "hw/pci/pci.h"
 #include "hw/i386/x86-iommu.h"
 #include "qom/object.h"
+#include "system/iommufd.h"
+#include "hw/vfio/pci.h"
 
 #define GENMASK64(h, l)  (((~0ULL) >> (63 - (h) + (l))) << (l))
 
@@ -167,6 +169,21 @@
 #define AMDVI_FEATURE_GA                  (1ULL << 7) /* guest VAPIC support */
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
+#define AMDVI_FEATURE_GIO                 (1ULL << 48)
+#define AMDVI_FEATURE_EPHSUP              (1ULL << 50)
+
+#define AMDVI_FEATURE_GATS_SHIFT     12
+#define AMDVI_FEATURE_GATS_MASK      0x03ULL
+#define AMDVI_FEATURE_GATS_5LEVEL    ((1ULL & AMDVI_FEATURE_GATS_MASK) << AMDVI_FEATURE_GATS_SHIFT)
+
+#define AMDVI_FEATURE_GLX_SHIFT      14
+#define AMDVI_FEATURE_GLX_MASK       0x03ULL
+#define AMDVI_FEATURE_GLX_2LEVEL     ((1ULL & AMDVI_FEATURE_GLX_MASK) << AMDVI_FEATURE_GLX_SHIFT)
+
+#define AMDVI_FEATURE_PASMAX_SHIFT   32
+#define AMDVI_FEATURE_PASMAX_MASK    0x1FULL
+#define AMDVI_FEATURE_PASMAX_16      ((0xFULL & AMDVI_FEATURE_PASMAX_MASK) << AMDVI_FEATURE_PASMAX_SHIFT)
+
 
 /* reserved DTE bits */
 #define AMDVI_DTE_QUAD0_RESERVED        (GENMASK64(6, 2) | GENMASK64(63, 63))
@@ -432,7 +449,62 @@ struct AMDVIState {
 
     /* root bus to register IOMMU ops */
     PCIBus *root_bus;
+
+    /*HW VIOMMU fields */
+    /* Hash Table
+     * key: AMDVI_dte_key {bus, devfn}
+     * data: HostIOMMUDevice
+     * hash: amd_dte_hash
+     * compare: amd_dte_equal
+     * Note:
+     * Insert during amdvi_set_iommu_device()
+     * Lookup during amdvi_set_iommu_device() to see if already been done
+     */
+    GHashTable *hiod_hash;
+    /* AMD IOMMU HW info */
+    struct iommu_hw_info_amd hwinfo;
+
+    /* /dev/iommu interface */
+    IOMMUFDBackend *iommufd;
+
+    /* Hash Table
+     * key: AMDVI_dte_key {bus, devfn}
+     * data: AMDIOMMUFDDevice
+     * hash: amd_as_hash
+     * compare: amd_as_equal
+     * Note:
+     * Insert during amdvi_set_iommu_device()
+     * Iterate during amd_viommu_state_change_running()
+     * Lookup during amd_viommu_get_device_from_bdf()
+     */
+    GHashTable *amd_iommufd_dev_hash;
+
+    uint32_t translate_id;
+    uint32_t last_bus_nr;
+
+    /* IOMMUFD alloc vIOMMU stuff */
+    struct iommu_viommu_amd iommufd_viommu_amd;
+    IOMMUFDViommu *core;
 };
+
+struct AMDVIHwpt {
+    uint32_t hwpt_id;
+    uint32_t parent_ioas_id; /* ioas_id or hwpt_id */
+    uint32_t users;
+};
+
+struct AMDIOMMUFDDevice {
+    IOMMUFDVdev *core;
+    uint32_t gdevid;
+    struct AMDVIHwpt v1_hwpt;
+    int v2_hwpt_id;
+    int passthrough_hwpt_id;
+    HostIOMMUDevice *hiod;
+    AMDVIState *iommu_state;
+    QLIST_ENTRY(AMDIOMMUFDDevice) next;
+};
+
+typedef struct AMDIOMMUFDDevice AMDIOMMUFDDevice;
 
 uint64_t amdvi_extended_feature_register(AMDVIState *s);
 
