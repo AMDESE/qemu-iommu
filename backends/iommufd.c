@@ -525,6 +525,37 @@ bool iommufd_viommu_invalidate_cache(IOMMUFDBackend *be, uint32_t viommu_id,
                                             errp);
 }
 
+IOMMUFDVeventq *iommufd_viommu_alloc_eventq(IOMMUFDViommu *viommu,
+                                            uint32_t type,
+                                            uint32_t depth)
+{
+    int ret, fd = viommu->iommufd->fd;
+    IOMMUFDVeventq *veventq = g_new0(IOMMUFDVeventq, 1);
+    struct iommu_veventq_alloc alloc_veventq = {
+        .size = sizeof(alloc_veventq),
+        .flags = 0,
+        .viommu_id = viommu->viommu_id,
+        .type = type,
+        .veventq_depth = depth,
+    };
+
+    ret = ioctl(fd, IOMMU_VEVENTQ_ALLOC, &alloc_veventq);
+
+    trace_iommufd_viommu_alloc_eventq(fd, viommu->viommu_id, type,
+                                      alloc_veventq.out_veventq_id,
+                                      alloc_veventq.out_veventq_fd, ret);
+    if (ret) {
+        error_report("IOMMU_VEVENTQ_ALLOC failed: %s", strerror(errno));
+        g_free(veventq);
+        return NULL;
+    }
+
+    veventq->viommu = viommu;
+    veventq->veventq_id = alloc_veventq.out_veventq_id;
+    veventq->veventq_fd = alloc_veventq.out_veventq_fd;
+    return veventq;
+}
+
 bool host_iommu_device_iommufd_attach_hwpt(HostIOMMUDeviceIOMMUFD *idev,
                                            uint32_t hwpt_id, Error **errp)
 {
