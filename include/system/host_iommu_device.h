@@ -33,11 +33,17 @@ typedef union VendorCaps {
  * @vendor_caps: host platform IOMMU vendor specific capabilities (e.g. on
  *               IOMMUFD this represents a user-space buffer filled by kernel
  *               with host IOMMU @type specific hardware information data)
+ *
+ * @nesting: nesting page table support.
+ *
+ * @fs1gp: first stage (a.k.a. Stage-1) 1GB huge page support.
  */
 typedef struct HostIOMMUDeviceCaps {
     uint32_t type;
     uint64_t hw_caps;
     VendorCaps vendor_caps;
+    bool nesting;
+    bool fs1gp;
 } HostIOMMUDeviceCaps;
 #endif
 
@@ -120,6 +126,8 @@ struct HostIOMMUDeviceClass {
  */
 #define HOST_IOMMU_DEVICE_CAP_IOMMU_TYPE        0
 #define HOST_IOMMU_DEVICE_CAP_AW_BITS           1
+#define HOST_IOMMU_DEVICE_CAP_NESTING           2
+#define HOST_IOMMU_DEVICE_CAP_FS1GP             3
 
 #define HOST_IOMMU_DEVICE_CAP_AW_BITS_MAX       64
 #endif
