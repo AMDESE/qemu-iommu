@@ -75,6 +75,7 @@ void *cpu_physical_memory_map(hwaddr addr,
                               bool is_write);
 void cpu_physical_memory_unmap(void *buffer, hwaddr len,
                                bool is_write, hwaddr access_len);
+bool cpu_physical_memory_is_ram(hwaddr phys_addr);
 
 /* vl.c */
 void list_cpus(void);
