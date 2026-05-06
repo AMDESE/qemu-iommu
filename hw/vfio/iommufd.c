@@ -30,6 +30,7 @@
 #include "vfio-iommufd.h"
 #include "vfio-helpers.h"
 #include "vfio-listener.h"
+#include "hw/i386/intel_iommu_internal.h"
 
 #define TYPE_HOST_IOMMU_DEVICE_IOMMUFD_VFIO             \
             TYPE_HOST_IOMMU_DEVICE_IOMMUFD "-vfio"
@@ -957,6 +958,18 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
     idev->iommufd = vdev->iommufd;
     idev->devid = vdev->devid;
     idev->hwpt_id = vdev->hwpt->hwpt_id;
+
+    switch (type) {
+    case IOMMU_HW_INFO_TYPE_INTEL_VTD:
+        caps->nesting = !!(vendor_caps->vtd.ecap_reg & VTD_ECAP_NEST);
+        caps->fs1gp = !!(vendor_caps->vtd.cap_reg & VTD_CAP_FS1GP);
+        break;
+    case IOMMU_HW_INFO_TYPE_ARM_SMMUV3:
+    case IOMMU_HW_INFO_TYPE_NONE:
+        break;
+    default:
+        break;
+    }
 
     return true;
 }
