@@ -21,6 +21,7 @@
 #include "trace.h"
 #include "hw/vfio/vfio-device.h"
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <linux/iommufd.h>
 
 static const char *iommufd_fd_name(IOMMUFDBackend *be)
@@ -450,7 +451,9 @@ bool iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t id,
 IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
                                             uint32_t dev_id,
                                             uint32_t viommu_type,
-                                            uint32_t hwpt_id)
+                                            uint32_t hwpt_id,
+                                            uint32_t data_len,
+                                            void *data_uptr)
 {
     int ret, fd = be->fd;
     IOMMUFDViommu *viommu = g_new0(IOMMUFDViommu, 1);
@@ -460,8 +463,8 @@ IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
         .type = viommu_type,
         .dev_id = dev_id,
         .hwpt_id = hwpt_id,
-        .data_len = 0,
-        .data_uptr = 0,
+        .data_len = data_len,
+        .data_uptr = (uintptr_t)data_uptr,
     };
 
     ret = ioctl(fd, IOMMU_VIOMMU_ALLOC, &alloc_viommu);
@@ -554,6 +557,80 @@ IOMMUFDVeventq *iommufd_viommu_alloc_eventq(IOMMUFDViommu *viommu,
     veventq->veventq_id = alloc_veventq.out_veventq_id;
     veventq->veventq_fd = alloc_veventq.out_veventq_fd;
     return veventq;
+}
+
+IOMMUFDVcmdq *iommufd_viommu_alloc_cmdq(IOMMUFDViommu *viommu,
+                                        uint32_t type,
+                                        uint32_t index,
+                                        uint64_t nesting_parent_iova,
+                                        uint64_t length)
+{
+    int ret, fd = viommu->iommufd->fd;
+    IOMMUFDVcmdq *vcmdq = g_new0(IOMMUFDVcmdq, 1);
+    struct iommu_hw_queue_alloc alloc_hwq = {
+        .size = sizeof(alloc_hwq),
+        .flags = 0,
+        .viommu_id = viommu->viommu_id,
+        .type = type,
+        .index = index,
+        .out_hw_queue_id = 0,
+        .nesting_parent_iova = nesting_parent_iova,
+        .length = length,
+    };
+
+    ret = ioctl(fd, IOMMU_HW_QUEUE_ALLOC, &alloc_hwq);
+
+    trace_iommufd_viommu_alloc_cmdq(fd, viommu->viommu_id, type, index,
+                                    nesting_parent_iova, length,
+                                    alloc_hwq.out_hw_queue_id, ret);
+    if (ret) {
+        error_report("IOMMU_HW_QUEUE_ALLOC failed: %s", strerror(errno));
+        g_free(vcmdq);
+        return NULL;
+    }
+
+    vcmdq->vcmdq_id = alloc_hwq.out_hw_queue_id;
+    vcmdq->viommu = viommu;
+    return vcmdq;
+}
+
+void *iommufd_viommu_get_shared_page(IOMMUFDViommu *viommu,
+                                     uint32_t size, bool readonly)
+{
+    uintptr_t pgsize = qemu_real_host_page_size();
+    off_t offset = viommu->viommu_id * pgsize;
+    uint32_t viommu_id = viommu->viommu_id;
+    int fd = viommu->iommufd->fd;
+    int prot = PROT_READ;
+    void *page;
+
+    if (!viommu_id) {
+        error_report("failed to get shared page with a zero viommu_id");
+        return NULL;
+    }
+    if (!readonly) {
+        prot |= PROT_WRITE;
+    }
+
+    page = mmap(NULL, size, prot, MAP_SHARED, fd, offset);
+    if (page == MAP_FAILED) {
+        error_report("failed to mmap shared page (size=0x%x) for viommu (id=%u)",
+                     size, viommu_id);
+        return NULL;
+    }
+
+    trace_iommufd_viommu_get_shared_page(fd, viommu_id, size, readonly);
+
+    return page;
+}
+
+void iommufd_viommu_put_shared_page(IOMMUFDViommu *viommu,
+                                    void *page, uint32_t size)
+{
+    if (munmap(page, size)) {
+        error_report("munmap shared page failed for viommu_id %u: %s",
+                     viommu->viommu_id, strerror(errno));
+    }
 }
 
 bool host_iommu_device_iommufd_attach_hwpt(HostIOMMUDeviceIOMMUFD *idev,
