@@ -38,6 +38,12 @@ struct IOMMUFDBackend {
     /*< public >*/
 };
 
+typedef struct IOMMUFDViommu {
+    IOMMUFDBackend *iommufd;
+    uint32_t s2_hwpt_id;
+    uint32_t viommu_id;
+} IOMMUFDViommu;
+
 bool iommufd_backend_connect(IOMMUFDBackend *be, Error **errp);
 void iommufd_backend_disconnect(IOMMUFDBackend *be);
 
@@ -69,6 +75,10 @@ bool iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t id,
                                       uint32_t data_type, uint32_t entry_len,
                                       uint32_t *entry_num, void *data,
                                       Error **errp);
+IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
+                                            uint32_t dev_id,
+                                            uint32_t viommu_type,
+                                            uint32_t hwpt_id);
 
 bool iommufd_change_process_capable(IOMMUFDBackend *be);
 bool iommufd_change_process(IOMMUFDBackend *be, Error **errp);
