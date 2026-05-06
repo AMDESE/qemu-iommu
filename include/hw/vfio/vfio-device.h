@@ -31,6 +31,7 @@
 #include "hw/vfio/vfio-cpr.h"
 #include "system/host_iommu_device.h"
 #include "system/iommufd.h"
+#include "system/iommufd_device.h"
 
 #define VFIO_MSG_PREFIX "vfio %s: "
 
@@ -86,6 +87,7 @@ typedef struct VFIODevice {
     HostIOMMUDevice *hiod;
     int devid;
     IOMMUFDBackend *iommufd;
+    IOMMUFDDevice idev;
     VFIOIOASHwpt *hwpt;
     QLIST_ENTRY(VFIODevice) hwpt_next;
     struct vfio_region_info **reginfo;
