@@ -14,7 +14,96 @@
 
 /* 
  * TODO: add command line arguments
+ * TODO: This patch is big so better to split it
+ *  --- Introducing address spaces
+ *  --- Updating header with SUPPORTED_EFR
+ *  --- Implementing set/unset iommu device
  */
+static void _build_efr_guest_translation(VendorCaps *caps,
+                                         uint64_t *efr, uint64_t  *efr2)
+{
+    *efr = (caps->amd.efr & SUPPORTED_EFR);
+    *efr2 = 0ULL;
+}
+
+struct AMDVI_dte_key {
+    PCIBus *bus;
+    uint8_t devfn;
+};
+
+static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
+                                   HostIOMMUDevice *hiod, Error **errp)
+{
+    AMDVIState *s = opaque;
+    VFIODevice *vbasedev = hiod->agent;
+    VFIOPCIDevice *vdev = container_of(vbasedev, VFIOPCIDevice, vbasedev);
+    PCIDevice *pdev = &vdev->parent_obj;
+    AMDIOMMUFDDevice *amd_idev;
+    struct AMDVI_dte_key *new_key;
+    struct AMDVI_dte_key key = {
+        .bus = bus,
+        .devfn = devfn,
+    };
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(hiod);
+    VendorCaps *caps = &hiod->caps.vendor_caps;
+
+    assert(hiod);
+    assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
+
+    fprintf(stderr, "DEBUG: %s: bus=%s(%#x), devfn=%#x, pdev_name=%s\n", __func__,
+	    bus->qbus.name, pci_bus_num(bus), devfn, pdev->name);
+
+    /* TODO: Replace this w/ amd_iommufd_dev_hash? */
+    if (g_hash_table_lookup(s->hiod_hash, &key)) {
+        error_setg(errp, "Host IOMMU device already exist");
+        return false;
+    }
+
+    if (hiod->caps.type != IOMMU_HW_INFO_TYPE_AMD) {
+        error_report("IOMMU hardware type %#x is not compatible!!!", hiod->caps.type);
+        return false;
+    }
+
+    new_key = g_malloc(sizeof(*new_key));
+    new_key->bus = bus;
+    new_key->devfn = devfn;
+
+    g_hash_table_insert(s->hiod_hash, new_key, hiod);
+
+    amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
+    amd_idev->iommu_state = s;
+    amd_idev->hiod = hiod;
+    amd_idev->v2_hwpt_id =  0;
+    amd_idev->passthrough_hwpt_id = 0;
+
+    g_hash_table_insert(s->amd_iommufd_dev_hash, new_key, amd_idev);
+
+    /* Use iommufd handler opened by device */
+    s->iommufd = idev->iommufd;
+    _build_efr_guest_translation(caps, (uint64_t*) &s->hwinfo.efr,
+                                 (uint64_t*) &s->hwinfo.efr2);
+
+    fprintf(stderr, "DEBUG %s: hwinfo 0x%llx 0x%llx\n",
+            __func__, s->hwinfo.efr, s->hwinfo.efr2);
+
+    return true;
+}
+
+static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
+                                     int devfn)
+{
+    AMDVIState *s = opaque;
+    struct AMDVI_dte_key key = {
+        .bus = bus,
+        .devfn = devfn,
+    };
+
+    if (!g_hash_table_lookup(s->hiod_hash, &key)) {
+        return;
+    }
+
+    g_hash_table_remove(s->hiod_hash, &key);
+}
 
 static AddressSpace *amd_viommu_get_address_space(PCIBus *bus, void *opaque, int devfn)
 {
@@ -31,6 +120,8 @@ static int amd_viommu_get_x86_iommu(void *opaque, void **x86_iommu)
 
 static const PCIIOMMUOps amdvi_iommu_ops = {
     .get_address_space = amd_viommu_get_address_space,
+    .set_iommu_device = amd_viommu_set_iommu_device,
+    .unset_iommu_device = amd_viommu_unset_iommu_device,
     .get_x86_iommu = amd_viommu_get_x86_iommu,
 };
 
@@ -140,6 +231,50 @@ static void amdvi_init(AMDVIState *s)
     memset(s->mmior, 0, AMDVI_MMIO_SIZE);
 }
 
+struct amd_as_key {
+    PCIBus *bus;
+    uint8_t devfn;
+    uint32_t pasid;
+};
+
+static gboolean amd_as_equal(gconstpointer v1, gconstpointer v2)
+{
+    const struct amd_as_key *key1 = v1;
+    const struct amd_as_key *key2 = v2;
+
+    return (key1->bus == key2->bus) && (key1->devfn == key2->devfn) &&
+           (key1->pasid == key2->pasid);
+}
+
+/*
+ * Note that we use pointer to PCIBus as the key, so hashing/shifting
+ * based on the pointer value is intended. Note that we deal with
+ * collisions through amd_as_equal().
+ */
+static guint amd_as_hash(gconstpointer v)
+{
+    const struct amd_as_key *key = v;
+    guint value = (guint)(uintptr_t)key->bus;
+
+    return (guint)(value << 8 | key->devfn);
+}
+
+static guint amdvi_dte_hash(gconstpointer v)
+{
+    const struct AMDVI_dte_key *key = v;
+    guint value = (guint)(uintptr_t)key->bus;
+
+    return (guint)(value << 8 | key->devfn);
+}
+
+static gboolean amdvi_dte_equal(gconstpointer v1, gconstpointer v2)
+{
+    const struct AMDVI_dte_key *key1 = v1;
+    const struct AMDVI_dte_key *key2 = v2;
+
+    return (key1->bus == key2->bus) && (key1->devfn == key2->devfn);
+}
+
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
@@ -176,6 +311,14 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
     }
 
     base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index);
+
+    s->amd_iommufd_dev_hash = g_hash_table_new_full(amd_as_hash, amd_as_equal,
+                                      g_free, g_free);
+
+    s->hiod_hash = g_hash_table_new_full(amdvi_dte_hash,
+                                         amdvi_dte_equal,
+                                         g_free,
+                                         g_free);
 
     /* Set up PCI Capability base address */
     pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_LOW,
