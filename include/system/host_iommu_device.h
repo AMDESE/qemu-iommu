@@ -37,6 +37,8 @@ typedef union VendorCaps {
  * @nesting: nesting page table support.
  *
  * @fs1gp: first stage (a.k.a. Stage-1) 1GB huge page support.
+ *
+ * @errata: host IOMMU errata flags (Intel VT-d uses enum iommu_hw_info_vtd_flags).
  */
 typedef struct HostIOMMUDeviceCaps {
     uint32_t type;
@@ -44,6 +46,7 @@ typedef struct HostIOMMUDeviceCaps {
     VendorCaps vendor_caps;
     bool nesting;
     bool fs1gp;
+    uint32_t errata;
 } HostIOMMUDeviceCaps;
 #endif
 
@@ -128,6 +131,7 @@ struct HostIOMMUDeviceClass {
 #define HOST_IOMMU_DEVICE_CAP_AW_BITS           1
 #define HOST_IOMMU_DEVICE_CAP_NESTING           2
 #define HOST_IOMMU_DEVICE_CAP_FS1GP             3
+#define HOST_IOMMU_DEVICE_CAP_ERRATA            4
 
 #define HOST_IOMMU_DEVICE_CAP_AW_BITS_MAX       64
 #endif
