@@ -20,6 +20,7 @@
 #include "trace.h"
 #include "qapi/error.h"
 #include "system/iommufd.h"
+#include "system/iommufd_device.h"
 #include "hw/core/qdev.h"
 #include "hw/vfio/vfio-cpr.h"
 #include "system/reset.h"
@@ -342,6 +343,38 @@ static bool iommufd_cdev_detach_ioas_hwpt(VFIODevice *vbasedev, Error **errp)
     trace_iommufd_cdev_detach_ioas_hwpt(iommufd, vbasedev->name);
     return true;
 }
+
+static int vfio_iommufd_device_attach_hwpt(IOMMUFDDevice *idev, uint32_t hwpt_id)
+{
+    VFIODevice *vbasedev = container_of(idev, VFIODevice, idev);
+    Error *err = NULL;
+    int ret;
+
+    ret = iommufd_cdev_attach_ioas_hwpt(vbasedev, hwpt_id, &err);
+    if (err) {
+        error_report_err(err);
+    }
+    return ret;
+}
+
+static int vfio_iommufd_device_detach_hwpt(IOMMUFDDevice *idev)
+{
+    VFIODevice *vbasedev = container_of(idev, VFIODevice, idev);
+    Error *err = NULL;
+
+    if (!iommufd_cdev_detach_ioas_hwpt(vbasedev, &err)) {
+        if (err) {
+            error_report_err(err);
+        }
+        return -EIO;
+    }
+    return 0;
+}
+
+static IOMMUFDDeviceOps vfio_iommufd_device_ops = {
+    .attach_hwpt = vfio_iommufd_device_attach_hwpt,
+    .detach_hwpt = vfio_iommufd_device_detach_hwpt,
+};
 
 static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
                                          VFIOIOMMUFDContainer *container,
@@ -698,6 +731,17 @@ found_container:
         goto err_listener_register;
     }
 
+    {
+        uint32_t def_hwpt = container->ioas_id;
+
+        if (vbasedev->hwpt) {
+            def_hwpt = vbasedev->hwpt->hwpt_id;
+        }
+        iommufd_device_init(&vbasedev->idev, sizeof(vbasedev->idev),
+                            &vfio_iommufd_device_ops,
+                            container->be, vbasedev->devid, def_hwpt);
+    }
+
     /*
      * TODO: examine RAM_BLOCK_DISCARD stuff, should we do group level
      * for discarding incompatibility check as well?
@@ -740,6 +784,7 @@ static void iommufd_cdev_detach(VFIODevice *vbasedev)
         iommufd_cdev_ram_block_discard_disable(false);
     }
 
+    iommufd_device_destroy(&vbasedev->idev);
     object_unref(vbasedev->hiod);
     iommufd_cdev_detach_container(vbasedev, container);
     iommufd_cdev_container_destroy(container);
