@@ -3829,6 +3829,19 @@ void cpu_physical_memory_unmap(void *buffer, hwaddr len,
     return address_space_unmap(&address_space_memory, buffer, len, is_write, access_len);
 }
 
+bool cpu_physical_memory_is_ram(hwaddr phys_addr)
+{
+    MemoryRegion *mr;
+    hwaddr l = 1;
+
+    RCU_READ_LOCK_GUARD();
+    mr = address_space_translate(&address_space_memory,
+                                 phys_addr, &phys_addr, &l, false,
+                                 MEMTXATTRS_UNSPECIFIED);
+
+    return memory_region_is_ram(mr);
+}
+
 #define ARG1_DECL                AddressSpace *as
 #define ARG1                     as
 #define SUFFIX
