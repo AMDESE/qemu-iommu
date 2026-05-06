@@ -511,6 +511,20 @@ IOMMUFDVdev *iommufd_backend_alloc_vdev(HostIOMMUDeviceIOMMUFD *idev,
     return vdev;
 }
 
+bool iommufd_viommu_invalidate_cache(IOMMUFDBackend *be, uint32_t viommu_id,
+                                     uint32_t data_type, uint32_t entry_len,
+                                     uint32_t *entry_num, void *data,
+                                     Error **errp)
+{
+    /*
+     * Kernel uses IOMMU_HWPT_INVALIDATE for both HWPT and vIOMMU targets;
+     * @hwpt_id carries the vIOMMU object id (see linux/iommufd.h).
+     */
+    return iommufd_backend_invalidate_cache(be, viommu_id, data_type,
+                                            entry_len, entry_num, data,
+                                            errp);
+}
+
 bool host_iommu_device_iommufd_attach_hwpt(HostIOMMUDeviceIOMMUFD *idev,
                                            uint32_t hwpt_id, Error **errp)
 {
