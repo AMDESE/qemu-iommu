@@ -59,6 +59,8 @@
 #define AMDVI_MMIO_EXCL_BASE          0x0020
 #define AMDVI_MMIO_EXCL_LIMIT         0x0028
 #define AMDVI_MMIO_EXT_FEATURES       0x0030
+#define AMDVI_MMIO_XT_EVENT_INT       0x0170
+#define AMDVI_MMIO_XT_PPR_INT         0x0178
 #define AMDVI_MMIO_COMMAND_HEAD       0x2000
 #define AMDVI_MMIO_COMMAND_TAIL       0x2008
 #define AMDVI_MMIO_EVENT_HEAD         0x2010
@@ -317,6 +319,9 @@
 #define AMDVI_DEV_LINT0_PASS_MASK       (1ULL << 62)
 #define AMDVI_DEV_LINT1_PASS_MASK       (1ULL << 63)
 
+#define AMDVI_DEVTAB_SIZE               8192
+#define AMDVI_DEVID_MAX                 0xFFFF
+
 /* Interrupt remapping table fields (Guest VAPIC not enabled) */
 union irte {
     uint32_t val;
@@ -382,6 +387,15 @@ struct AMDVIPCIState {
     uint32_t capab_offset;       /* capability offset pointer    */
 };
 
+struct AMDVI_dte_info {
+    int last;
+    int curr;
+    uint64_t dte0;
+    uint64_t dte1;
+};
+
+typedef struct AMDVI_dte_info AMDVI_dte_info;
+
 struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
     AMDVIPCIState *pci;         /* IOMMU PCI device             */
@@ -397,14 +411,21 @@ struct AMDVIState {
     bool excl_enabled;
 
     hwaddr devtab_base;               /* base address device table    */
+    uint8_t *devtab;
+    size_t devtab_size;          /* device table size            */
     uint64_t devtab_len;         /* device table length          */
+    MemoryRegion devtab_mr;      /* device table region          */
 
+    struct AMDVI_dte_info dte_info[AMDVI_DEVID_MAX];
+
+    struct IOMMUFDHWqueue *cmdbuf_hwq;
     hwaddr cmdbuf;               /* command buffer base address  */
     uint64_t cmdbuf_len;         /* command buffer length        */
     uint32_t cmdbuf_head;        /* current IOMMU read position  */
     uint32_t cmdbuf_tail;        /* next Software write position */
     bool completion_wait_intr;
 
+    struct IOMMUFDHWqueue *evtlog_hwq;
     hwaddr evtlog;               /* base address event log       */
     bool evtlog_intr;
     uint32_t evtlog_len;         /* event log length             */
@@ -417,6 +438,7 @@ struct AMDVIState {
     bool excl_allow;             /* translate accesses to the exclusion range */
     bool excl_enable;            /* exclusion range enabled          */
 
+    struct IOMMUFDHWqueue *pprlog_hwq;
     hwaddr ppr_log;              /* base address ppr log */
     uint32_t pprlog_len;         /* ppr log len  */
     uint32_t pprlog_head;        /* ppr log head */
