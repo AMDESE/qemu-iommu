@@ -14,6 +14,322 @@
 #include "amd_iommu.h"
 #include "amd_viommu.h"
 
+#include "system/runstate.h"
+#include "hw/vfio/vfio-iommufd.h"
+#include "system/iommufd.h"
+
+/*
+ * Mapping 3st 4K (VF MMIO space)
+ * Must be called after out_vfmmio_mmap_offset is set
+ * when amdvi_viommu_initialized_one() is called.
+ */
+static void amd_viommu_vm_state_change(void *opaque,
+                                        bool running, RunState state);
+
+static void amd_viommu_state_change_shutdown(AMDVIState *s);
+
+static int amd_viommu_mmap_vf_mmio(AMDVIState *s)
+{
+    char *name;
+    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+    uint64_t baseaddr = AMDVI_BASE_ADDR + (x86_iommu->index * AMDVI_MMIO_SIZE);
+
+    s->vf_mmio_page = mmap(NULL,
+                         AMDVI_PAGE_SIZE,
+                         PROT_READ | PROT_WRITE,
+			             MAP_SHARED,
+                         s->iommufd->fd,
+                         s->iommufd_viommu_amd.out_vfmmio_mmap_offset);
+
+    if (s->vf_mmio_page == MAP_FAILED) {
+	    error_report("Failed to mmap VF MMIO");
+	    s->vf_mmio_page = NULL;
+	    return -EIO;
+    }
+
+    name = g_strdup_printf("vf-mmio");
+    memory_region_init_ram_device_ptr(&s->mr_vf_mmio,
+                                      memory_region_owner(&s->mr_vf_mmio),
+                                      name,
+                                      0x1000,
+                                      s->vf_mmio_page);
+    /*
+     * This is a vf-mmio region that is not used for DMA.
+     * It is needs to be mapped as RAM in order to allow CPU nested pagetable
+     * to map for the vf-mmio region.
+     */
+    memory_region_set_skip_vfio_dma(&s->mr_vf_mmio, true);
+
+    memory_region_add_subregion_overlap(get_system_memory(),
+                                        baseaddr + 0x2000,
+                                        &s->mr_vf_mmio,
+                                        1);
+    g_free(name);
+    return 0;
+}
+
+struct AMDVI_dte_key {
+    PCIBus *bus;
+    uint8_t devfn;
+};
+
+
+static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
+{
+    AMDIOMMUFDDevice *amd_idev = (AMDIOMMUFDDevice *)opaque;
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+    uint16_t rid = pci_requester_id(b->parent_dev);
+    struct AMDVI_dte_key key = {
+        .bus = b,
+        .devfn = d->devfn,
+    };
+
+    if (!g_hash_table_lookup(amd_idev->iommu_state->hiod_hash, &key))
+        return;
+
+    if (object_dynamic_cast(OBJECT(b->parent_dev), TYPE_PCI_BRIDGE))
+        rid += 0x100;
+
+    fprintf(stderr, "DEBUG: %s: --- bus=%#x, bus_parent_dev=%s, device name=%s, rid=%#x\n", __func__,
+            pci_bus_num(b), b->parent_dev->name, d->name, rid);
+
+    amd_idev->core = iommufd_backend_alloc_vdev(idev, amd_idev->iommu_state->core, rid);
+    if (!amd_idev->core) {
+        error_report("failed to allocate a vDEVICE");
+    }
+}
+
+static void *amdvi_walk_bus_setup(PCIBus *b, void *opaque)
+{
+    uint16_t rid = pci_requester_id(b->parent_dev);
+
+    fprintf(stderr, "DEBUG: %s: bus_name=%s, bus=%#x, bus_parent_dev=%s, rid=%#x\n", __func__,
+    b->qbus.name, pci_bus_num(b), b->parent_dev->name, rid);
+
+    pci_for_each_device_under_bus(b, amdvi_alloc_vdev, opaque);
+    return opaque;
+}
+
+static void amdvi_alloc_passthrough_hwpt(AMDIOMMUFDDevice *dev, AMDVIState *s)
+{
+
+    struct iommu_hwpt_amd_guest hwpt = {{0,0,0,0}};
+    VFIODevice *vdev = dev->hiod->agent;
+    Error *local_err = NULL;
+    uint32_t hwpt_id;
+    int ret;
+
+
+    ret = iommufd_backend_alloc_hwpt(s->iommufd,
+                                     vdev->idev.dev_id,
+                                     s->core->viommu_id,
+                                     0,
+                                     IOMMU_HWPT_DATA_AMD_GUEST,
+                                     sizeof(hwpt), &hwpt, &hwpt_id, &local_err);
+
+    assert(ret == true);
+
+    dev->passthrough_hwpt_id = hwpt_id;
+    dev->v2_hwpt_id = 0;
+}
+
+static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
+{
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+    s->iommufd_viommu_amd.kvmfd = kvm_vmfd(kvm_state);
+
+    s->core = iommufd_backend_alloc_viommu(s->iommufd,
+                                           idev->devid,
+                                           IOMMU_VIOMMU_TYPE_AMD,
+                                           amd_idev->v1_hwpt.hwpt_id,
+                                           sizeof(s->iommufd_viommu_amd),
+                                           &s->iommufd_viommu_amd);
+    if (!s->core) {
+        error_report("failed to allocate a viommu");
+        return -EINVAL;
+    }
+
+    s->enabled = true;
+    fprintf(stderr, "DEBUG: %s: iommufd vIOMMU initialized.\n", __func__);
+
+    /* Allocate a passthrough domain */
+    amdvi_alloc_passthrough_hwpt(amd_idev, s);
+    return 0;
+}
+
+static int amd_viommu_get_v1_hwpt(AMDIOMMUFDDevice *dev, uint32_t devid, AMDVIState *s)
+{
+    Error *local_err = NULL;
+    int ret;
+    uint32_t hwpt_id;
+    VFIODevice *vdev = dev->hiod->agent;
+    VFIOContainer *bcontainer = vdev->bcontainer;
+    VFIOIOMMUFDContainer *ioc = VFIO_IOMMU_IOMMUFD(bcontainer);
+    uint32_t ioas_id = ioc->ioas_id;
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(dev->hiod);
+
+    fprintf(stderr, "DEBUG: %s: ALLOC_PARENT devid=%#x\n", __func__, devid);
+
+//SURAVEE: TODO: MOVE THIS
+    /* Allocated nested parent domain */
+    if (s->hwpt_cnt == 0) {
+        ret = iommufd_backend_alloc_hwpt(dev->iommu_state->iommufd,
+                                         idev->devid,
+                                         ioas_id,
+                                         IOMMU_HWPT_ALLOC_NEST_PARENT,
+                                         IOMMU_HWPT_DATA_NONE,
+                                         0,
+                                         NULL,
+                                         &hwpt_id,
+                                         &local_err);
+        if (!ret) {
+            fprintf(stderr, "%s: iommufd_backend_alloc_hwpt failed\n", __func__);
+            return -EINVAL;
+        }
+
+        dev->v1_hwpt.hwpt_id = hwpt_id;
+        dev->v1_hwpt.parent_ioas_id = ioas_id;
+    }
+
+    /* Attached device to nested parent domain */
+    if (!host_iommu_device_iommufd_attach_hwpt(idev, dev->v1_hwpt.hwpt_id, &local_err)) {
+	    fprintf(stderr, "%s: Attach_hwpt failed for devid 0x%x\n",
+                    __func__, vdev->idev.dev_id);
+	    return -EINVAL;
+    }
+    s->hwpt_cnt++;
+
+    return 0;
+}
+
+/*
+ * Note: This must be called when running state is RUN_STATE_RUNNING
+ */
+static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
+{
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+    fprintf(stderr, "DEBUG: %s\n", __func__);
+
+    if (amd_viommu_get_v1_hwpt(amd_idev, idev->devid, s))
+        return;
+
+    if (!s->enabled && amdvi_viommu_initialized_one(s, amd_idev))
+        return;
+
+    if (amd_viommu_mmap_vf_mmio(s))
+        goto out_hwpt;
+
+    pci_for_each_bus_depth_first(s->root_bus, amdvi_walk_bus_setup, NULL, amd_idev);
+
+    fprintf(stderr, "DEBUG: %s: returning\n", __func__);
+    return;
+
+out_hwpt:
+    return;
+}
+
+static void amd_viommu_state_change_running(AMDVIState *s)
+{
+    struct amd_as_key *key;
+    AMDIOMMUFDDevice *amd_idev;
+    GHashTableIter it;
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    /* Go through each VFIO device */
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        amdvi_vdevice_viommu_setup(s, amd_idev);
+    }
+}
+
+static void amd_viommu_state_change_shutdown(AMDVIState *s)
+{
+    Error *errp = NULL;
+    struct amd_as_key *key;
+    HostIOMMUDevice *hiod;
+    GHashTableIter hiod_it, amd_idev_it;
+    AMDIOMMUFDDevice *amd_idev;
+    HostIOMMUDeviceIOMMUFD *idev;
+
+    if (s->vf_mmio_page) {
+        munmap(s->vf_mmio_page, AMDVI_PAGE_SIZE);
+        s->vf_mmio_page = NULL;
+    }
+
+    if (s->pprlog_hwq)
+        iommufd_backend_free_id(s->iommufd, s->pprlog_hwq->hw_queue_id);
+    if (s->evtlog_hwq)
+        iommufd_backend_free_id(s->iommufd, s->evtlog_hwq->hw_queue_id);
+    if (s->cmdbuf_hwq)
+        iommufd_backend_free_id(s->iommufd, s->cmdbuf_hwq->hw_queue_id);
+
+    /*
+     * VFIO devices was attached to the nested parent domain.
+     * We need to attach them to the ioas id.
+     */
+     if (s->hiod_hash) {
+        g_hash_table_iter_init(&hiod_it, s->hiod_hash);
+        while (g_hash_table_iter_next(&hiod_it, (void **)&key, (void **)&hiod)) {
+            VFIODevice *vdev_detach = hiod->agent;
+            VFIOIOMMUFDContainer *ioc_detach =
+                VFIO_IOMMU_IOMMUFD(vdev_detach->bcontainer);
+            uint32_t ioas_detach = ioc_detach->ioas_id;
+
+            idev = HOST_IOMMU_DEVICE_IOMMUFD(hiod);
+
+            if (!host_iommu_device_iommufd_attach_hwpt(idev, ioas_detach, &errp)) {
+                error_free(errp);
+                continue;
+            }
+            s->hwpt_cnt--;
+        }
+        //g_hash_table_destroy(s->hiod_hash);
+    }
+
+    if (s->amd_iommufd_dev_hash) {
+        g_hash_table_iter_init(&amd_idev_it, s->amd_iommufd_dev_hash);
+        while (g_hash_table_iter_next(&amd_idev_it, (void **)&key, (void **)&amd_idev)) {
+            if (amd_idev->v2_hwpt_id)
+                iommufd_backend_free_id(s->iommufd, amd_idev->v2_hwpt_id);
+            if (amd_idev->core && amd_idev->core->vdev_id)
+                iommufd_backend_free_id(s->iommufd, amd_idev->core->vdev_id);
+            if (amd_idev->passthrough_hwpt_id)
+                iommufd_backend_free_id(s->iommufd, amd_idev->passthrough_hwpt_id);
+            g_free(amd_idev->core);
+            g_free(amd_idev);
+        }
+    }
+
+    if (s->core && s->core->viommu_id)
+        iommufd_backend_free_id(s->iommufd, s->core->viommu_id);
+    g_free(s->core);
+
+    /* This must be done after freeing viommu_id */
+    iommufd_backend_free_id(s->iommufd, amd_idev->v1_hwpt.hwpt_id);
+//    g_free(s);
+}
+static void amd_viommu_vm_state_change(void *opaque,
+                                        bool running, RunState state)
+{
+    AMDVIState *s = opaque;
+
+    fprintf(stderr, "DEBUG: %s: state=%u\n", __func__, state);
+
+    switch (state) {
+    case RUN_STATE_RUNNING:
+        amd_viommu_state_change_running(s);
+        break;
+    case RUN_STATE_SHUTDOWN:
+        amd_viommu_state_change_shutdown(s);
+        break;
+    default:
+        break;
+    }
+}
+
+
 static void amdvi_set_quad(AMDVIState *s, hwaddr addr, uint64_t val,
                            uint64_t romask, uint64_t w1cmask)
 {
@@ -599,11 +915,6 @@ static void _build_efr_guest_translation(VendorCaps *caps,
     *efr2 = 0ULL;
 }
 
-struct AMDVI_dte_key {
-    PCIBus *bus;
-    uint8_t devfn;
-};
-
 static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
                                    HostIOMMUDevice *hiod, Error **errp)
 {
@@ -813,6 +1124,8 @@ static void amdvi_init(AMDVIState *s)
 	    s->dte_info[i].dte0 = ~0ULL;
 	    s->dte_info[i].dte1 = ~0ULL;
     }
+
+    qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
 }
 
 
@@ -930,6 +1243,37 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
     amdvi_init(s);
 }
 
+static void amd_viommu_unrealize(DeviceState *dev)
+{
+    AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
+    struct amd_as_key *key;
+    GHashTableIter it;
+    AMDIOMMUFDDevice *amd_idev;
+    Error *local_err = NULL;
+
+    if (s->hwpt_cnt == 0)
+        munmap(s->vf_mmio_page, AMDVI_PAGE_SIZE);
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        HostIOMMUDeviceIOMMUFD *hdev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+        if (!amd_idev->v2_hwpt_id) {
+            continue;
+        }
+
+        host_iommu_device_iommufd_attach_hwpt(
+                hdev,
+                amd_idev->passthrough_hwpt_id,
+                &local_err);
+
+        iommufd_backend_free_id(s->iommufd, amd_idev->v2_hwpt_id);
+        amd_idev->v2_hwpt_id = 0;
+    }
+
+}
+
 static void amd_viommu_sysbus_reset(DeviceState *dev)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
@@ -952,6 +1296,7 @@ static void amd_viommu_class_init(ObjectClass *klass, const void *data)
     dc->vmsd = &vmstate_amd_viommu;
     dc->hotpluggable = false;
     dc_class->realize = amd_viommu_sysbus_realize;
+    dc_class->unrealize = amd_viommu_unrealize;
 
     /* Supported by the pc-q35-* machine types */
     dc->user_creatable = true;
