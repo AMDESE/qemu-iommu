@@ -50,10 +50,10 @@ typedef struct IOMMUFDVeventq {
     uint32_t veventq_fd;
 } IOMMUFDVeventq;
 
-typedef struct IOMMUFDVcmdq {
+typedef struct IOMMUFDHWqueue {
     IOMMUFDViommu *viommu;
-    uint32_t vcmdq_id;
-} IOMMUFDVcmdq;
+    uint32_t hw_queue_id;
+} IOMMUFDHWqueue;
 
 bool iommufd_backend_connect(IOMMUFDBackend *be, Error **errp);
 void iommufd_backend_disconnect(IOMMUFDBackend *be);
@@ -68,6 +68,11 @@ int iommufd_backend_map_dma(IOMMUFDBackend *be, uint32_t ioas_id, hwaddr iova,
                             uint64_t size, void *vaddr, bool readonly);
 int iommufd_backend_unmap_dma(IOMMUFDBackend *be, uint32_t ioas_id,
                               hwaddr iova, uint64_t size);
+/*
+ * ioctl(IOMMU_GET_HW_INFO). If @type points to a non-zero value before the call,
+ * IOMMU_HW_INFO_FLAG_INPUT_TYPE is set so the kernel interprets it as @in_data_type.
+ * Otherwise initialize *type to zero for normal discovery behavior.
+ */
 bool iommufd_backend_get_device_info(IOMMUFDBackend *be, uint32_t devid,
                                      uint32_t *type, void *data, uint32_t len,
                                      uint64_t *caps, Error **errp);
@@ -160,11 +165,11 @@ bool iommufd_viommu_invalidate_cache(IOMMUFDBackend *be, uint32_t viommu_id,
 IOMMUFDVeventq *iommufd_viommu_alloc_eventq(IOMMUFDViommu *viommu,
                                            uint32_t type,
                                            uint32_t depth);
-IOMMUFDVcmdq *iommufd_viommu_alloc_cmdq(IOMMUFDViommu *viommu,
-                                        uint32_t type,
-                                        uint32_t index,
-                                        uint64_t nesting_parent_iova,
-                                        uint64_t length);
+IOMMUFDHWqueue *iommufd_viommu_alloc_hw_queue(IOMMUFDViommu *viommu,
+                                              uint32_t type,
+                                              uint32_t index,
+                                              uint64_t nesting_parent_iova,
+                                              uint64_t length);
 void *iommufd_viommu_get_shared_page(IOMMUFDViommu *viommu,
                                      uint32_t size, bool readonly);
 void iommufd_viommu_put_shared_page(IOMMUFDViommu *viommu,
