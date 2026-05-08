@@ -872,6 +872,8 @@ struct MemoryRegion {
 
     /* For devices designed to perform re-entrant IO into their own IO MRs */
     bool disable_reentrancy_guard;
+
+    bool skip_vfio_dma;
 };
 
 struct IOMMUMemoryRegion {
@@ -2526,6 +2528,13 @@ void memory_region_set_alias_offset(MemoryRegion *mr,
  * @unmergeable: whether to mark the #MemoryRegion unmergeable
  */
 void memory_region_set_unmergeable(MemoryRegion *mr, bool unmergeable);
+
+void memory_region_set_skip_vfio_dma(MemoryRegion *mr, bool skip);
+
+static inline bool memory_region_skip_vfio_dma(const MemoryRegion *mr)
+{
+    return mr->skip_vfio_dma;
+}
 
 /**
  * memory_region_present: checks if an address relative to a @container
