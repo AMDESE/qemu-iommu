@@ -383,7 +383,7 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
     ERRP_GUARD();
     IOMMUFDBackend *iommufd = vbasedev->iommufd;
     VFIOContainer *bcontainer = VFIO_IOMMU(container);
-    uint32_t type, flags = 0;
+    uint32_t type = 0, flags = 0;
     uint64_t hw_caps;
     VendorCaps caps;
     VFIOIOASHwpt *hwpt;
@@ -984,12 +984,13 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
     HostIOMMUDeviceIOMMUFD *idev;
     HostIOMMUDeviceCaps *caps = &hiod->caps;
     VendorCaps *vendor_caps = &caps->vendor_caps;
-    enum iommu_hw_info_type type;
+    enum iommu_hw_info_type type = IOMMU_HW_INFO_TYPE_DEFAULT;
     uint64_t hw_caps;
 
     hiod->agent = opaque;
 
-    if (!iommufd_backend_get_device_info(vdev->iommufd, vdev->devid, &type,
+    if (!iommufd_backend_get_device_info(vdev->iommufd, vdev->devid,
+                                         (uint32_t *)&type,
                                          vendor_caps, sizeof(*vendor_caps),
                                          &hw_caps, errp)) {
         return false;
@@ -1012,6 +1013,7 @@ static bool hiod_iommufd_vfio_realize(HostIOMMUDevice *hiod, void *opaque,
             IOMMU_HW_INFO_VTD_ERRATA_772415_SPR17;
         break;
     case IOMMU_HW_INFO_TYPE_ARM_SMMUV3:
+    case IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV:
     case IOMMU_HW_INFO_TYPE_NONE:
         break;
     default:
