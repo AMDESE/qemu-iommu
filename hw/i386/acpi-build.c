@@ -72,6 +72,7 @@
 
 #include "qom/qom-qobject.h"
 #include "hw/i386/amd_iommu.h"
+#include "hw/i386/amd_viommu.h"
 #include "hw/i386/intel_iommu.h"
 #include "hw/virtio/virtio-iommu.h"
 
@@ -1768,7 +1769,7 @@ select_devices:
 static uint32_t
 get_amd_ivhd_feature_report(AMDVIState *s)
 {
-    uint64_t feature = amdvi_extended_feature_register(s);
+    uint64_t feature = s->get_extended_feature_register(s);
     bool is_gt = !!(feature & AMDVI_FEATURE_GT);
     bool is_ga = !!(feature & AMDVI_FEATURE_GA);
     uint64_t hats_mode = (feature & AMDVI_HATS_MODE_MASK) >>
@@ -1784,6 +1785,18 @@ get_amd_ivhd_feature_report(AMDVIState *s)
                      gats_mode << AMD_IVHD_FEATURE_REPORT_GATS_SHIFT;
 
     return feature_report;
+}
+
+static AMDVIState *get_amd_iommu_state(X86IOMMUState *x86_iommu)
+{
+        AMDVIState *s;
+        DeviceState *iommu = DEVICE(&x86_iommu->busdev);
+        if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
+            s = AMD_IOMMU_DEVICE(x86_iommu);
+        } else {
+            s = AMD_VIOMMU_DEVICE(x86_iommu);
+        }
+        return s;
 }
 
 static void
@@ -1814,8 +1827,8 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * is sufficient when no aliases are present.
      */
     QLIST_FOREACH(x86_iommu, x86_iommu_list, next) {
-        AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
         GArray *ivhd_blob = g_array_new(false, true, 1);
+        AMDVIState *s = get_amd_iommu_state(x86_iommu);
         PCIDevice *iommu_dev = &(s->pci->dev);
         int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
         uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
@@ -1873,7 +1886,7 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         ivhd11.base_addr = s->mr_mmio.addr;
         ivhd11.iommu_attributes = !s->iommu.dma_translation <<
                                   AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
-        ivhd11.efr = amdvi_extended_feature_register(s);
+        ivhd11.efr = s->get_extended_feature_register(s);
         g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));
         /* IVHD entries as found above */
         g_array_append_vals(table_data, ivhd_blob->data, ivhd_blob->len);
@@ -2063,7 +2076,8 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
 
     x86_iommu = QLIST_FIRST(x86_iommus);
     iommu = DEVICE(&x86_iommu->busdev);
-    if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
+    if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE) ||
+        object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
         acpi_add_table(table_offsets, tables_blob);
         build_amd_iommu(tables_blob, tables->linker, x86ms->oem_id,
                         x86ms->oem_table_id);

@@ -512,6 +512,8 @@ struct AMDVIState {
     void *vf_mmio_page;           /* MMIO mmap pointer */
 
     int hwpt_cnt;		/* Track number of device attached to IOMMU */
+
+    uint64_t (*get_extended_feature_register)(AMDVIState *s);
 };
 
 struct AMDVIHwpt {
