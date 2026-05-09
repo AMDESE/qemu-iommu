@@ -1198,6 +1198,12 @@ out:
     return bus;
 }
 
+
+static uint64_t amd_viommu_extended_feature_register(AMDVIState *s)
+{
+    return s->hwinfo.efr;
+}
+
 static void amdvi_init(AMDVIState *s)
 {
 
@@ -1212,6 +1218,7 @@ static void amdvi_init(AMDVIState *s)
     s->mmio_enabled = false;
     s->enabled = false;
     s->cmdbuf_enabled = false;
+    s->get_extended_feature_register = amd_viommu_extended_feature_register;
 
     /* reset MMIO */
     memset(s->mmior, 0, AMDVI_MMIO_SIZE);
