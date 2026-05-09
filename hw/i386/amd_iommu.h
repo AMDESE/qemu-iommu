@@ -520,6 +520,8 @@ struct AMDVIState {
     MemoryRegion mr_vf_mmio;       /* 3st 4K for HW-vIOMMU (VF MMIO) */
     MemoryRegion mr_vf_ctrl_mmio;  /* 1st 4K for HW-vIOMMU (VF CTRL MMIO) */
     void *vf_mmio_page;           /* MMIO mmap pointer */
+
+    uint64_t (*get_extended_feature_register)(AMDVIState *s);
 };
 
 struct AMDVIHwpt {
