@@ -441,6 +441,10 @@ int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
         .kvmfd = kvmfd,
     };
 
+    if (idev->tdi_bound && kvmfd >= 0) {
+        return 0;
+    }
+
     ret = ioctl(fd, IOMMU_VDEVICE_TSM_BIND, &b);
     if (ret < 0) {
         error_report("vfio: failed to bind TEE IO dev %X to CoCo VM: %d=%s",
