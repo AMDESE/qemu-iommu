@@ -617,7 +617,11 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
         if (!dev) {
             fprintf(stderr, "DEBUG: %s: %u: Failed get_device_from_bdf (%#x)\n",
                     __func__, __LINE__, devid);
-            exit(-EINVAL);
+            /* With newer multiple IOMMU support we publish buses in IVRS
+             * This means that kernel will try to program DTE for qemu buses
+             * We can safely ignore these DTE writes.
+             */
+            return;
         }
 
         /* Write everything */
