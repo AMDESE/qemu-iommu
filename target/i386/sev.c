@@ -2340,12 +2340,6 @@ static int kvm_handle_vmgexit_tio_req(SevCommonState *sev_common, struct kvm_use
                                   rqh->msg_sz, rqh->algo, data ? DUMPHEX8(data) : 0,
                                   DUMPHEX8(rqh->authtag));
 
-#define MMIO_VALIDATE_GPA(r)      ((r) & 0x000FFFFFFFFFF000ULL)
-#define MMIO_VALIDATE_LEN(r)      (1ULL << (12 + (((r) >> 4) & 0xFF)))
-#define MMIO_VALIDATE_RANGEID(r)  ((r) & 0x7)
-#define MMIO_VALIDATE_RESERVED(r) ((r) & 0xFFF0000000000000ULL)
-#define MMIO_VALIDATE_PRIVATE(r)  (!!((r) & BIT(3)))
-
     if (ex->tio_req.flags & KVM_USER_VMGEXIT_TIO_REQ_FLAG_MMIO_CONFIG) {
         printf("+++Q+++ (%u) %s %u: TODO FIXME MMIO_CONFIG\n", getpid(), __func__, __LINE__);
         goto unmap_exit;
@@ -2358,7 +2352,7 @@ static int kvm_handle_vmgexit_tio_req(SevCommonState *sev_common, struct kvm_use
 
     if (sdte_msg) {
         if (ex->tio_req.flags & KVM_USER_VMGEXIT_TIO_REQ_FLAG_SDTE_VALIDATE) {
-            tsmk->tsm_remap(pdev, ex->tio_req.gpa & ~0xFFF, &err);
+            tsmk->tsm_remap(pdev, ex->tio_req.gpa, &err);
         } else {
             tsmk->tsm_remap(pdev, 0, &err);
         }
