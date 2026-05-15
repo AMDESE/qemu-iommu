@@ -514,6 +514,7 @@ struct AMDVIState {
     int hwpt_cnt;		/* Track number of device attached to IOMMU */
 
     uint64_t (*get_extended_feature_register)(AMDVIState *s);
+    bool vdevice_setup;
 };
 
 struct AMDVIHwpt {
