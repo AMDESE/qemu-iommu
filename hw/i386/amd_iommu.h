@@ -522,6 +522,7 @@ struct AMDVIState {
     void *vf_mmio_page;           /* MMIO mmap pointer */
 
     uint64_t (*get_extended_feature_register)(AMDVIState *s);
+    bool vdevice_setup;
 };
 
 struct AMDVIHwpt {

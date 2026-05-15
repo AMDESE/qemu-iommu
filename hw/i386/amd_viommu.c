@@ -13,11 +13,11 @@
 #include "amd_iommu.h"
 #include "amd_viommu.h"
 
-#include "system/kvm.h"
 #include "system/runstate.h"
 #include "hw/core/iommu.h"
 #include "hw/vfio/vfio-iommufd.h"
 #include "system/iommufd.h"
+#include "system/kvm.h"
 
 /*
  * Mapping 3st 4K (VF MMIO space)
@@ -100,6 +100,19 @@ static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
         rid += 0x100;
 
     fprintf(stderr, "DEBUG: %s: --- bus=%#x, bus_parent_dev=%s, device name=%s, rid=%#x\n", __func__,
+            pci_bus_num(b), b->parent_dev->name, d->name, rid);
+
+    rid = PCI_BUILD_BDF(pci_bus_num(b), d->devfn);
+    /*
+    static int position = 1;
+    if (position == 1) {
+        rid = 0x2200;
+	position++;
+    } else {
+        rid = 0x7200;
+    }
+    */
+    fprintf(stderr, "DEBUG AGAIN: %s: --- bus=%#x, bus_parent_dev=%s, device name=%s, rid=%#x\n", __func__,
             pci_bus_num(b), b->parent_dev->name, d->name, rid);
 
     amd_idev->core = iommufd_backend_alloc_vdev(idev, amd_idev->iommu_state->core, rid);
@@ -200,13 +213,26 @@ static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev
     if (amd_viommu_mmap_vf_mmio(s))
         goto out_hwpt;
 
-    pci_for_each_bus_depth_first(s->root_bus, amdvi_walk_bus_setup, NULL, amd_idev);
+    // Sairaj: Moved vdevice setup from here
 
     fprintf(stderr, "DEBUG: %s: returning\n", __func__);
     return;
 
 out_hwpt:
     return;
+}
+
+static void vdev_alloc_all(AMDVIState *s) {
+    struct amd_as_key *key;
+    AMDIOMMUFDDevice *amd_idev;
+    GHashTableIter it;
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    /* Go through each VFIO device */
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        pci_for_each_bus_depth_first(s->root_bus, amdvi_walk_bus_setup, NULL, amd_idev);
+    }
 }
 
 static void amd_viommu_state_change_running(AMDVIState *s)
@@ -372,9 +398,6 @@ static void amdvi_writeq(AMDVIState *s, hwaddr addr, uint64_t val)
     stq_le_p(&s->mmior[addr],
             ((oldval & romask) | (val & ~romask)) & ~(val & w1cmask));
 }
-
-
-
 
 static void amd_viommu_intcapxt_decode(uint64_t val, uint32_t *vcpu_id,
                                        uint8_t *vector)
@@ -1223,6 +1246,7 @@ static void amdvi_init(AMDVIState *s)
     s->enabled = false;
     s->cmdbuf_enabled = false;
     s->get_extended_feature_register = amd_viommu_extended_feature_register;
+    s->vdevice_setup = false;
 
     /* reset MMIO */
     memset(s->mmior, 0, AMDVI_MMIO_SIZE);
@@ -1337,7 +1361,7 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
      * crop it to 0x2000 as we use priority 1 for the vfmmio
      */
     memory_region_init_io(&s->mr_mmio, OBJECT(s), &mmio_mem_ops, s,
-                          "amdvi-mmio", AMDVI_MMIO_SIZE);
+                          "amdvi-mmio", 0x2000);
     memory_region_add_subregion(get_system_memory(), base_addr,
                                 &s->mr_mmio);
 
@@ -1391,9 +1415,31 @@ static void amd_viommu_unrealize(DeviceState *dev)
 static void amd_viommu_sysbus_reset(DeviceState *dev)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
+          struct amd_as_key *key;
+      GHashTableIter it;
+      AMDIOMMUFDDevice *amd_idev;
+      Error *local_err = NULL;
+
     if (s->devtab) {
         cleanup_devtab(s);
     }
+         g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+      while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+          HostIOMMUDeviceIOMMUFD *hdev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+          if (!amd_idev->v2_hwpt_id) {
+              continue;
+          }
+
+          host_iommu_device_iommufd_attach_hwpt(
+                  hdev,
+                  amd_idev->passthrough_hwpt_id,
+                  &local_err);
+
+          iommufd_backend_free_id(s->iommufd, amd_idev->v2_hwpt_id);
+          amd_idev->v2_hwpt_id = 0;
+      }
 }
 
 static const Property amd_viommu_properties[] = {
