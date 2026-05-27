@@ -22,4 +22,7 @@ enum viommu_flags {
     VIOMMU_FLAG_WANT_NESTING_PARENT = BIT_ULL(0),
 };
 
+/* ABI constant: IOMMU_NO_PASID must always be 0 (keep in sync with kernel) */
+#define IOMMU_NO_PASID 0
+
 #endif /* HW_IOMMU_H */
