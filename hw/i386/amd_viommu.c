@@ -443,6 +443,7 @@ fprintf(stderr, "DEBUG1: %s: iter bus=%#x, devfn=%#x\n", __func__, pci_bus_num(k
     return NULL;
 }
 
+#if 0
 static uint64_t get_gcr3_trp(uint64_t *dte)
 {
     uint64_t tmp1, tmp2, tmp3;
@@ -453,6 +454,7 @@ static uint64_t get_gcr3_trp(uint64_t *dte)
 
     return (tmp1 << 12) | (tmp2 << 15) | (tmp3 << 31);
 }
+#endif
 
 static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
 				  uint16_t dev_id, uint64_t *dte)
@@ -511,7 +513,7 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
     AMDIOMMUFDDevice *dev;
     AMDVI_dte_info *dte_info;
     bool v = false;
-    uint64_t gcr3_trp;
+//    uint64_t gcr3_trp;
     uint64_t dte[4];
     uint64_t offset0 = 0, offset1 = 0, offset2 = 0, offset3 = 0;
     uint32_t devid;
@@ -580,10 +582,10 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
     dte[3] = amd_viommu_dte_read(opaque, offset3, size);
 
     v = dte[0] & 0x1ULL;
-    gcr3_trp = get_gcr3_trp(dte);
+//    gcr3_trp = get_gcr3_trp(dte);
 
-    fprintf(stderr, "DEBUG: %s: gdevid=%#04x, gcr3_trp=%016lx DTE[%lu] offset=%#05lx, dte=%016lx:%016lx:%016lx:%016lx\n",
-            __func__, devid, gcr3_trp, (offset % 0x20) >> 3, offset, dte[0], dte[1], dte[2], dte[3]);
+//    fprintf(stderr, "DEBUG: %s: gdevid=%#04x, gcr3_trp=%016lx DTE[%lu] offset=%#05lx, dte=%016lx:%016lx:%016lx:%016lx\n",
+//            __func__, devid, gcr3_trp, (offset % 0x20) >> 3, offset, dte[0], dte[1], dte[2], dte[3]);
 
     /*
      * Handle cases:
