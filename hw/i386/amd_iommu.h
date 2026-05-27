@@ -511,8 +511,6 @@ struct AMDVIState {
     MemoryRegion mr_vf_ctrl_mmio;  /* 1st 4K for HW-vIOMMU (VF CTRL MMIO) */
     void *vf_mmio_page;           /* MMIO mmap pointer */
 
-    int hwpt_cnt;		/* Track number of device attached to IOMMU */
-
     uint64_t (*get_extended_feature_register)(AMDVIState *s);
     bool vdevice_setup;
 };

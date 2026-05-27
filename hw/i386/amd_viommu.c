@@ -15,6 +15,7 @@
 #include "amd_viommu.h"
 
 #include "system/runstate.h"
+#include "hw/core/iommu.h"
 #include "hw/vfio/vfio-iommufd.h"
 #include "system/iommufd.h"
 
@@ -171,47 +172,21 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
     return 0;
 }
 
-static int amd_viommu_get_v1_hwpt(AMDIOMMUFDDevice *dev, uint32_t devid, AMDVIState *s)
+static int amd_viommu_setup_nest_parent(AMDIOMMUFDDevice *dev)
 {
-    Error *local_err = NULL;
-    int ret;
-    uint32_t hwpt_id;
     VFIODevice *vdev = dev->hiod->agent;
-    VFIOContainer *bcontainer = vdev->bcontainer;
-    VFIOIOMMUFDContainer *ioc = VFIO_IOMMU_IOMMUFD(bcontainer);
-    uint32_t ioas_id = ioc->ioas_id;
-    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(dev->hiod);
+    VFIOIOASHwpt *hwpt = vdev->hwpt;
+    VFIOIOMMUFDContainer *ioc = VFIO_IOMMU_IOMMUFD(vdev->bcontainer);
 
-    fprintf(stderr, "DEBUG: %s: ALLOC_PARENT devid=%#x\n", __func__, devid);
-
-//SURAVEE: TODO: MOVE THIS
-    /* Allocated nested parent domain */
-    if (s->hwpt_cnt == 0) {
-        ret = iommufd_backend_alloc_hwpt(dev->iommu_state->iommufd,
-                                         idev->devid,
-                                         ioas_id,
-                                         IOMMU_HWPT_ALLOC_NEST_PARENT,
-                                         IOMMU_HWPT_DATA_NONE,
-                                         0,
-                                         NULL,
-                                         &hwpt_id,
-                                         &local_err);
-        if (!ret) {
-            fprintf(stderr, "%s: iommufd_backend_alloc_hwpt failed\n", __func__);
-            return -EINVAL;
-        }
-
-        dev->v1_hwpt.hwpt_id = hwpt_id;
-        dev->v1_hwpt.parent_ioas_id = ioas_id;
+    if (!hwpt || !(hwpt->hwpt_flags & IOMMU_HWPT_ALLOC_NEST_PARENT)) {
+        error_report("%s: device %s missing VFIO nesting parent HWPT "
+                     "(VIOMMU_FLAG_WANT_NESTING_PARENT)",
+                     __func__, vdev->name);
+        return -EINVAL;
     }
 
-    /* Attached device to nested parent domain */
-    if (!host_iommu_device_iommufd_attach_hwpt(idev, dev->v1_hwpt.hwpt_id, &local_err)) {
-	    fprintf(stderr, "%s: Attach_hwpt failed for devid 0x%x\n",
-                    __func__, vdev->idev.dev_id);
-	    return -EINVAL;
-    }
-    s->hwpt_cnt++;
+    dev->v1_hwpt.hwpt_id = hwpt->hwpt_id;
+    dev->v1_hwpt.parent_ioas_id = ioc->ioas_id;
 
     return 0;
 }
@@ -221,11 +196,9 @@ static int amd_viommu_get_v1_hwpt(AMDIOMMUFDDevice *dev, uint32_t devid, AMDVISt
  */
 static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
 {
-    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
-
     fprintf(stderr, "DEBUG: %s\n", __func__);
 
-    if (amd_viommu_get_v1_hwpt(amd_idev, idev->devid, s))
+    if (amd_viommu_setup_nest_parent(amd_idev))
         return;
 
     if (!s->enabled && amdvi_viommu_initialized_one(s, amd_idev))
@@ -309,7 +282,6 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
                 error_free(errp);
                 continue;
             }
-            s->hwpt_cnt--;
         }
         //g_hash_table_destroy(s->hiod_hash);
     }
@@ -331,10 +303,7 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
     if (s->core && s->core->viommu_id)
         iommufd_backend_free_id(s->iommufd, s->core->viommu_id);
     g_free(s->core);
-
-    /* This must be done after freeing viommu_id */
-    iommufd_backend_free_id(s->iommufd, amd_idev->v1_hwpt.hwpt_id);
-//    g_free(s);
+    s->core = NULL;
 }
 static void amd_viommu_vm_state_change(void *opaque,
                                         bool running, RunState state)
@@ -1037,11 +1006,17 @@ static int amd_viommu_get_x86_iommu(void *opaque, void **x86_iommu)
     return 0;
 }
 
+static uint64_t amd_viommu_get_viommu_flags(void *opaque)
+{
+    return VIOMMU_FLAG_WANT_NESTING_PARENT;
+}
+
 static const PCIIOMMUOps amdvi_iommu_ops = {
     .get_address_space = amd_viommu_get_address_space,
     .set_iommu_device = amd_viommu_set_iommu_device,
     .unset_iommu_device = amd_viommu_unset_iommu_device,
     .get_x86_iommu = amd_viommu_get_x86_iommu,
+    .get_viommu_flags = amd_viommu_get_viommu_flags,
 };
 
 static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
@@ -1294,8 +1269,10 @@ static void amd_viommu_unrealize(DeviceState *dev)
     AMDIOMMUFDDevice *amd_idev;
     Error *local_err = NULL;
 
-    if (s->hwpt_cnt == 0)
+    if (s->vf_mmio_page) {
         munmap(s->vf_mmio_page, AMDVI_PAGE_SIZE);
+        s->vf_mmio_page = NULL;
+    }
 
     g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
 
