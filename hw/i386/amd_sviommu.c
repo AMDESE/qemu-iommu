@@ -509,9 +509,16 @@ static bool amdvi_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     };
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(hiod);
     HostIOMMUDeviceHwInfo hwinfo = hiod->hwinfo;
+    VFIODevice *vdev = hiod->agent;
 
     assert(hiod);
     assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
+
+    if (!vdev || !vdev->tee_io) {
+        error_report("Cannot attach non-tee device to svIOMMU\n");
+        error_report("Please add x-tio=true for device which is managed by svIOMMU\n");
+        exit (1);
+    }
 
     /* Check for duplicate using amd_iommufd_dev_hash */
     if (g_hash_table_lookup(s->amd_iommufd_dev_hash, &key)) {
