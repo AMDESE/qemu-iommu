@@ -362,7 +362,8 @@ static bool iommufd_cdev_autodomains_get(VFIODevice *vbasedev,
 
         if (!iommufd_backend_alloc_viommu(iommufd, vbasedev->devid,
                                           IOMMU_VIOMMU_TYPE_AMD_TSM,
-                                          hwpt_id, &viommu_id, errp)) {
+                                          hwpt_id, NULL, 0, &viommu_id,
+                                          errp)) {
             return false;
         }
 
