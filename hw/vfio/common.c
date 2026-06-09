@@ -691,6 +691,12 @@ static void vfio_listener_region_add(MemoryListener *listener,
         }
     }
 
+    if (memory_region_skip_iommu_map(section->mr)) {
+        trace_vfio_listener_region_skip_dma_map(memory_region_name(section->mr),
+                                                iova, int128_get64(llsize));
+        return;
+    }
+
     if (memory_region_has_guest_memfd(section->mr)) {
         memfd = section->mr->ram_block->guest_memfd;
         vaddr = (void *) section->offset_within_region;
