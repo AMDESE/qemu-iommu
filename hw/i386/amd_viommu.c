@@ -506,7 +506,7 @@ static void amd_viommu_alloc_queue(AMDVIOMMUState *s, AMDVIOMMUHwQueue *queue)
 {
     uint32_t flags = 0;
     uint64_t mmio_val = 0;
-    uint64_t addr, len;
+    uint64_t addr, len, queue_size;
     const char *queue_name = "";
     Error *local_err = NULL;
 
@@ -530,6 +530,8 @@ static void amd_viommu_alloc_queue(AMDVIOMMUState *s, AMDVIOMMUHwQueue *queue)
 
     addr = mmio_val & AMDVI_MMIO_BUF_BASE_MASK;
     len = (mmio_val & AMDVI_MMIO_BUF_SIZE_MASK) >> AMDVI_MMIO_BUF_SIZE_SHIFT;
+    /* Guest BASE[59:56] is encoded (2^(len+4) entries). */
+    queue_size = 1ULL << (len + 4);
 
     if (queue->enable_hw_queue && queue->addr == addr && queue->len == len &&
         queue->flags == flags) {
@@ -542,8 +544,9 @@ static void amd_viommu_alloc_queue(AMDVIOMMUState *s, AMDVIOMMUHwQueue *queue)
 
     if (!iommufd_backend_alloc_hw_queue(s->iommufd_state.iommufd,
                                         s->iommufd_state.viommu_id,
-                                        queue->type, 0, addr, len, flags,
-                                        &queue->hw_queue_id, &local_err)) {
+                                        queue->type, 0, addr, queue_size,
+                                        flags, &queue->hw_queue_id,
+                                        &local_err)) {
         error_reportf_err(local_err, "Failed to allocate %s buffer: ",
                           queue_name);
         return;
@@ -554,7 +557,7 @@ static void amd_viommu_alloc_queue(AMDVIOMMUState *s, AMDVIOMMUHwQueue *queue)
     queue->flags = flags;
     queue->enable_hw_queue = true;
 
-    trace_amd_viommu_alloc_hw_queue(queue_name, addr, len, flags,
+    trace_amd_viommu_alloc_hw_queue(queue_name, addr, queue_size, flags,
                                     queue->hw_queue_id);
 }
 

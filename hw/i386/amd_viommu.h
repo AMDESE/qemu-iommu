@@ -20,7 +20,7 @@ typedef struct AMDVIOMMUHwQueue {
     uint32_t hw_queue_id;
     uint64_t addr;              /* Queue Base address */
     uint32_t type;              /* Queue type */
-    uint8_t len;                /* Queue length       */
+    uint8_t len;                /* Encoded guest BASE[59:56] length */
     uint32_t flags;             /* Queue flags        */
 } AMDVIOMMUHwQueue;
 
