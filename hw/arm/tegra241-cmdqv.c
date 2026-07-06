@@ -258,7 +258,7 @@ static bool tegra241_cmdqv_setup_vcmdq(Tegra241CMDQV *cmdqv, int index,
 
     if (!iommufd_backend_alloc_hw_queue(viommu->iommufd, viommu->viommu_id,
                                         IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV,
-                                        index, addr, size, &hw_queue_id,
+                                        index, addr, size, 0, &hw_queue_id,
                                         errp)) {
         /* Record the failure in the cache. */
         cmdqv->vcmdq_gerror[index] |= R_VCMDQ0_GERROR_CMDQ_INIT_ERR_MASK;

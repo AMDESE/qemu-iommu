@@ -557,12 +557,13 @@ bool iommufd_backend_alloc_veventq(IOMMUFDBackend *be, uint32_t viommu_id,
 bool iommufd_backend_alloc_hw_queue(IOMMUFDBackend *be, uint32_t viommu_id,
                                     uint32_t queue_type, uint32_t index,
                                     uint64_t addr, uint64_t length,
-                                    uint32_t *out_hw_queue_id, Error **errp)
+                                    uint32_t flags, uint32_t *out_hw_queue_id,
+                                    Error **errp)
 {
     int ret;
     struct iommu_hw_queue_alloc alloc_hw_queue = {
         .size = sizeof(alloc_hw_queue),
-        .flags = 0,
+        .flags = flags,
         .viommu_id = viommu_id,
         .type = queue_type,
         .index = index,
@@ -582,6 +583,33 @@ bool iommufd_backend_alloc_hw_queue(IOMMUFDBackend *be, uint32_t viommu_id,
 
     g_assert(out_hw_queue_id);
     *out_hw_queue_id = alloc_hw_queue.out_hw_queue_id;
+    return true;
+}
+
+bool iommufd_viommu_ext_int_remap(IOMMUFDBackend *be, uint32_t viommu_id,
+                                  uint32_t type, int kvmfd, uint32_t vcpu_id,
+                                  uint32_t vector, Error **errp)
+{
+    int ret;
+    struct iommu_viommu_ext_int_remap ext_int_remap = {
+        .size = sizeof(ext_int_remap),
+        .object_id = viommu_id,
+        .type = type,
+        .flags = 0,
+        .kvmfd = kvmfd,
+        .vcpu_id = vcpu_id,
+        .vector = vector,
+    };
+
+    ret = ioctl(be->fd, IOMMU_VIOMMU_EXT_INT_REMAP, &ext_int_remap);
+
+    trace_iommufd_viommu_ext_int_remap(be->fd, viommu_id, type, kvmfd,
+                                       vcpu_id, vector, ret);
+    if (ret) {
+        error_setg_errno(errp, errno, "IOMMU_VIOMMU_EXT_INT_REMAP failed");
+        return false;
+    }
+
     return true;
 }
 
