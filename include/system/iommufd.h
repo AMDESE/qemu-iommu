@@ -109,7 +109,12 @@ bool iommufd_backend_alloc_veventq(IOMMUFDBackend *be, uint32_t viommu_id,
 bool iommufd_backend_alloc_hw_queue(IOMMUFDBackend *be, uint32_t viommu_id,
                                     uint32_t queue_type, uint32_t index,
                                     uint64_t addr, uint64_t length,
-                                    uint32_t *out_hw_queue_id, Error **errp);
+                                    uint32_t flags, uint32_t *out_hw_queue_id,
+                                    Error **errp);
+
+bool iommufd_viommu_ext_int_remap(IOMMUFDBackend *be, uint32_t viommu_id,
+                                  uint32_t type, int kvmfd, uint32_t vcpu_id,
+                                  uint32_t vector, Error **errp);
 
 bool iommufd_backend_viommu_mmap(IOMMUFDBackend *be, uint32_t viommu_id,
                                  uint64_t size, off_t offset, void **out_ptr,
