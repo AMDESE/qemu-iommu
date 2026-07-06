@@ -485,6 +485,28 @@ IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
     return viommu;
 }
 
+int iommufd_viommu_ext_int_remap(IOMMUFDViommu *viommu, uint32_t type,
+                                 int kvmfd, uint32_t vcpu_id, uint32_t vector)
+{
+    int ret, fd = viommu->iommufd->fd;
+    struct iommu_viommu_ext_int_remap arg = {
+        .size = sizeof(arg),
+        .object_id = viommu->viommu_id,
+        .type = type,
+        .flags = 0,
+        .kvmfd = kvmfd,
+        .vcpu_id = vcpu_id,
+        .vector = vector,
+        .__reserved = 0,
+    };
+
+    ret = ioctl(fd, IOMMU_VIOMMU_EXT_INT_REMAP, &arg);
+    if (ret) {
+        error_report("IOMMU_VIOMMU_EXT_INT_REMAP failed: %s", strerror(errno));
+    }
+    return ret;
+}
+
 IOMMUFDVdev *iommufd_backend_alloc_vdev(HostIOMMUDeviceIOMMUFD *idev,
                                         IOMMUFDViommu *viommu,
                                         uint64_t virt_id)
@@ -565,13 +587,14 @@ IOMMUFDHWqueue *iommufd_viommu_alloc_hw_queue(IOMMUFDViommu *viommu,
                                                uint32_t type,
                                                uint32_t index,
                                                uint64_t nesting_parent_iova,
-                                               uint64_t length)
+                                               uint64_t length,
+                                               uint32_t flags)
 {
     int ret, fd = viommu->iommufd->fd;
     IOMMUFDHWqueue *hw_queue = g_new0(IOMMUFDHWqueue, 1);
     struct iommu_hw_queue_alloc alloc_hwq = {
         .size = sizeof(alloc_hwq),
-        .flags = 0,
+        .flags = flags,
         .viommu_id = viommu->viommu_id,
         .type = type,
         .index = index,

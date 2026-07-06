@@ -169,7 +169,10 @@ IOMMUFDHWqueue *iommufd_viommu_alloc_hw_queue(IOMMUFDViommu *viommu,
                                               uint32_t type,
                                               uint32_t index,
                                               uint64_t nesting_parent_iova,
-                                              uint64_t length);
+                                              uint64_t length,
+                                              uint32_t flags);
+int iommufd_viommu_ext_int_remap(IOMMUFDViommu *viommu, uint32_t type,
+                                 int kvmfd, uint32_t vcpu_id, uint32_t vector);
 void *iommufd_viommu_get_shared_page(IOMMUFDViommu *viommu,
                                      uint32_t size, bool readonly);
 void iommufd_viommu_put_shared_page(IOMMUFDViommu *viommu,
