@@ -57,6 +57,7 @@ enum {
 	IOMMUFD_CMD_IOAS_CHANGE_PROCESS = 0x92,
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
+	IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP = 0x95,
 };
 
 /**
@@ -456,15 +457,26 @@ struct iommu_hwpt_arm_smmuv3 {
 };
 
 /**
+ * struct iommu_hwpt_amd_guest - AMD IOMMU guest I/O page table data
+ *				 (IOMMU_HWPT_DATA_AMD_GUEST)
+ * @dte: Guest Device Table Entry (DTE)
+ */
+struct iommu_hwpt_amd_guest {
+	__aligned_u64 dte[4];
+};
+
+/**
  * enum iommu_hwpt_data_type - IOMMU HWPT Data Type
  * @IOMMU_HWPT_DATA_NONE: no data
  * @IOMMU_HWPT_DATA_VTD_S1: Intel VT-d stage-1 page table
  * @IOMMU_HWPT_DATA_ARM_SMMUV3: ARM SMMUv3 Context Descriptor Table
+ * @IOMMU_HWPT_DATA_AMD_GUEST: AMD IOMMU guest page table
  */
 enum iommu_hwpt_data_type {
 	IOMMU_HWPT_DATA_NONE = 0,
 	IOMMU_HWPT_DATA_VTD_S1 = 1,
 	IOMMU_HWPT_DATA_ARM_SMMUV3 = 2,
+	IOMMU_HWPT_DATA_AMD_GUEST = 3,
 };
 
 /**
@@ -614,6 +626,32 @@ struct iommu_hw_info_tegra241_cmdqv {
 };
 
 /**
+ * struct iommu_hw_info_amd - AMD IOMMU device info
+ *
+ * @efr : Value of AMD IOMMU Extended Feature Register (EFR)
+ * @efr2: Value of AMD IOMMU Extended Feature 2 Register (EFR2)
+ *
+ * Please See description of these registers in the following sections of
+ * the AMD I/O Virtualization Technology (IOMMU) Specification.
+ * (https://docs.amd.com/v/u/en-US/48882_3.10_PUB)
+ *
+ * - MMIO Offset 0030h IOMMU Extended Feature Register
+ * - MMIO Offset 01A0h IOMMU Extended Feature 2 Register
+ *
+ * Note: The EFR and EFR2 are raw values reported by hardware.
+ * VMM is responsible to determine the appropriate flags to be exposed to
+ * the VM since cetertain features are not currently supported by the kernel
+ * for HW-vIOMMU.
+ *
+ * Current VMM-allowed list of feature flags are:
+ * - EFR[GTSup, GASup, GioSup, PPRSup, EPHSup, GATS, GLX, PASmax]
+ */
+struct iommu_hw_info_amd {
+	__aligned_u64 efr;
+	__aligned_u64 efr2;
+};
+
+/**
  * enum iommu_hw_info_type - IOMMU Hardware Info Types
  * @IOMMU_HW_INFO_TYPE_NONE: Output by the drivers that do not report hardware
  *                           info
@@ -622,6 +660,7 @@ struct iommu_hw_info_tegra241_cmdqv {
  * @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type
  * @IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                     SMMUv3) info type
+ * @IOMMU_HW_INFO_TYPE_AMD: AMD IOMMU info type
  */
 enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_NONE = 0,
@@ -629,6 +668,7 @@ enum iommu_hw_info_type {
 	IOMMU_HW_INFO_TYPE_INTEL_VTD = 1,
 	IOMMU_HW_INFO_TYPE_ARM_SMMUV3 = 2,
 	IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV = 3,
+	IOMMU_HW_INFO_TYPE_AMD = 4,
 };
 
 /**
@@ -999,11 +1039,13 @@ struct iommu_fault_alloc {
  * @IOMMU_VIOMMU_TYPE_ARM_SMMUV3: ARM SMMUv3 driver specific type
  * @IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM
  *                                    SMMUv3) enabled ARM SMMUv3 type
+ * @IOMMU_VIOMMU_TYPE_AMD: AMD HW-vIOMMU type
  */
 enum iommu_viommu_type {
 	IOMMU_VIOMMU_TYPE_DEFAULT = 0,
 	IOMMU_VIOMMU_TYPE_ARM_SMMUV3 = 1,
 	IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV = 2,
+	IOMMU_VIOMMU_TYPE_AMD = 3,
 };
 
 /**
@@ -1020,6 +1062,14 @@ enum iommu_viommu_type {
 struct iommu_viommu_tegra241_cmdqv {
 	__aligned_u64 out_vintf_mmap_offset;
 	__aligned_u64 out_vintf_mmap_length;
+};
+
+/**
+ * struct iommu_viommu_amd - AMD vIOMMU Interface (IOMMU_VIOMMU_TYPE_AMD)
+ * @out_vfmmio_mmap_offset: (out) mmap offset for vIOMMU VF-MMIO
+ */
+struct iommu_viommu_amd {
+	__aligned_u64 out_vfmmio_mmap_offset;
 };
 
 /**
@@ -1058,6 +1108,52 @@ struct iommu_viommu_alloc {
 	__aligned_u64 data_uptr;
 };
 #define IOMMU_VIOMMU_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_ALLOC)
+
+/**
+ * enum iommu_viommu_ext_int_type - Extended interrupt remapping target
+ * @IOMMU_VIOMMU_EXT_INT_EVENT: Event-log interrupt (host MMIO 0x170)
+ * @IOMMU_VIOMMU_EXT_INT_PPR: PPR-log interrupt (host MMIO 0x178)
+ */
+enum iommu_viommu_ext_int_type {
+	IOMMU_VIOMMU_EXT_INT_EVENT = 0,
+	IOMMU_VIOMMU_EXT_INT_PPR = 1,
+};
+
+/**
+ * enum iommu_viommu_ext_int_flags - Must be 0
+ */
+enum iommu_viommu_ext_int_flags {
+	IOMMU_VIOMMU_EXT_INT_FLAG_NONE = 0,
+};
+
+/**
+ * struct iommu_viommu_ext_int_remap - ioctl(IOMMU_VIOMMU_EXT_INT_REMAP)
+ * @size: sizeof(struct iommu_viommu_ext_int_remap)
+ * @object_id: vIOMMU ID from IOMMU_VIOMMU_ALLOC
+ * @type: One of enum iommu_viommu_ext_int_type
+ * @flags: Must be 0
+ * @kvmfd: KVM VM fd for the guest that owns this vIOMMU
+ * @vcpu_id: KVM vCPU ID to deliver the interrupt to
+ * @vector: Guest APIC vector (only bits 7:0 are used)
+ * @__reserved: Must be 0
+ *
+ * Program Extended-IRT guest interrupt delivery for a vIOMMU log
+ * interrupt. The first successful call for @object_id records the KVM
+ * VM; later calls must use a @kvmfd that resolves to the same VM.
+ */
+struct iommu_viommu_ext_int_remap {
+	__u32 size;
+	__u32 object_id;
+	__u32 type;
+	__u32 flags;
+	__u32 kvmfd;
+	__u32 vcpu_id;
+	__u32 vector;
+	__u32 __reserved;
+};
+#define IOMMU_VIOMMU_EXT_INT_REMAP \
+	_IOW(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP, \
+	     struct iommu_viommu_ext_int_remap)
 
 /**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
@@ -1254,12 +1350,41 @@ enum iommu_hw_queue_type {
 	 *   emulated vSMMU's IDR1.CMDQS to log2(huge page size / 16 bytes)
 	 */
 	IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV = 1,
+	IOMMU_HW_QUEUE_TYPE_AMD_CMD,
+	IOMMU_HW_QUEUE_TYPE_AMD_EVT,
+	IOMMU_HW_QUEUE_TYPE_AMD_PPR,
+};
+
+/**
+ * enum iommu_hw_queue_flags_amd - AMD HW Queue Flags
+ * @IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN        : Command buffer enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN       : Command wait enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN       : Event log enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN       : Event interrupt enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN        : PPR log enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN        : PPR print enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN           : PPR enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN  : PPR auto response enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN    : Block stop mark enable
+ * @IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON : PPR auto response on next enable
+ */
+enum iommu_hw_queue_flags_amd {
+	IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN = 1 << 0,
+	IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN = 1 << 1,
+	IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN = 1 << 2,
+	IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN = 1 << 3,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN = 1 << 4,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN = 1 << 5,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN = 1 << 6,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN = 1 << 7,
+	IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN = 1 << 8,
+	IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON = 1 << 9,
 };
 
 /**
  * struct iommu_hw_queue_alloc - ioctl(IOMMU_HW_QUEUE_ALLOC)
  * @size: sizeof(struct iommu_hw_queue_alloc)
- * @flags: Must be 0
+ * @flags: HW queue flags based on enum iommu_hw_queue_type
  * @viommu_id: Virtual IOMMU ID to associate the HW queue with
  * @type: One of enum iommu_hw_queue_type
  * @index: The logical index to the HW queue per virtual IOMMU for a multi-queue
