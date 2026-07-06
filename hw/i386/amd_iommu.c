@@ -546,7 +546,7 @@ static bool amdvi_validate_dte(AMDVIState *s, uint16_t devid,
         (dte[2] & AMDVI_DTE_QUAD2_RESERVED) ||
         (dte[3] & AMDVI_DTE_QUAD3_RESERVED)) {
         amdvi_log_illegaldevtab_error(s, devid,
-                                      s->devtab +
+                                      s->devtab_base +
                                       devid * AMDVI_DEVTAB_ENTRY_SIZE, 0);
         return false;
     }
@@ -559,7 +559,7 @@ static bool amdvi_validate_dte(AMDVIState *s, uint16_t devid,
     root = (dte[0] & AMDVI_DEV_PT_ROOT_MASK) >> 12;
     if (root && !s->iommu.dma_translation) {
         amdvi_log_illegaldevtab_error(s, devid,
-                                      s->devtab +
+                                      s->devtab_base +
                                       devid * AMDVI_DEVTAB_ENTRY_SIZE, 0);
         return false;
     }
@@ -2486,7 +2486,7 @@ static const VMStateDescription vmstate_amdvi_sysbus_migratable = {
       VMSTATE_BOOL(evtlog_enabled, AMDVIState),
       VMSTATE_BOOL(evtlog_intr, AMDVIState),
       /* Updated in amdvi_handle_devtab_write() */
-      VMSTATE_UINT64(devtab, AMDVIState),
+      VMSTATE_UINT64(devtab_base, AMDVIState),
       VMSTATE_UINT64(devtab_len, AMDVIState),
       /* Updated in amdvi_handle_cmdbase_write() */
       VMSTATE_UINT64(cmdbuf, AMDVIState),
