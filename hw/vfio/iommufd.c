@@ -868,13 +868,21 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
         object_dynamic_cast(OBJECT(vbasedev->dev), TYPE_VFIO_PCI);
     IOMMUFDBackend *iommufd = vbasedev->iommufd;
 
-    if (!idev->vdevice && !idev->tdi_bound) {
+    if (viommu_present(vbasedev)) {
+        if (!pci_device_config_iommu_device(&vfio_pci_dev->pdev, errp)) {
+            error_prepend(errp, "Failed to configure vIOMMU device");
+            return -1;
+        }
+    } else if (!idev->vdevice && !idev->tdi_bound) {
         idev->vdevice = iommufd_backend_alloc_vdev(idev, iommufd->viommu,
 						   pci_get_bdf(&vfio_pci_dev->pdev));
         if (!idev->vdevice) {
             error_setg(errp, "failed to allocate a vdevice");
             return -1;
         }
+    } else {
+        error_setg(errp, "failed to allocate a vdevice");
+        return -1;
     }
 
     return iommufd_backend_tsm_bind(idev->vdevice, kvmfd);
