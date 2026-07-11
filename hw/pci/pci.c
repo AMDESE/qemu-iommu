@@ -2973,6 +2973,21 @@ void pci_device_unset_iommu_device(PCIDevice *dev)
     }
 }
 
+bool pci_device_config_iommu_device(PCIDevice *dev, Error **errp)
+{
+    PCIBus *iommu_bus;
+
+    pci_device_get_iommu_bus_devfn(dev, &iommu_bus, NULL, NULL);
+
+    if (iommu_bus && iommu_bus->iommu_ops->config_iommu_device) {
+        return iommu_bus->iommu_ops->config_iommu_device(pci_get_bus(dev),
+                                                         iommu_bus->iommu_opaque,
+                                                         dev->devfn, errp);
+    }
+
+    return true;
+}
+
 void pci_setup_iommu(PCIBus *bus, const PCIIOMMUOps *ops, void *opaque)
 {
 //SURAVEE: HACK
