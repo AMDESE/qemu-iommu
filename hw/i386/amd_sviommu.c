@@ -301,27 +301,45 @@ out:
     exit (1);
 }
 
-static void amdvi_alloc_vdev(gpointer key, gpointer value, gpointer user_data)
+/* PCIIOMMUOps::config_iommu_device callback. */
+static bool amdvi_setup_vdevice(PCIBus *bus, void *opaque, int devfn,
+                                Error **errp)
 {
-    AMDSVIOMMUDevice *amd_idev = value;
-    AMDSVIOMMUState *s = amd_idev->sviommu;
-    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
-    PCIDevice *bridge = amd_idev->bus->parent_dev;
-    Error *local_err = NULL;
+    AMDSVIOMMUState *s = opaque;
+    AMDSVIOMMUDevice *amd_idev;
+    HostIOMMUDeviceIOMMUFD *idev;
+    AMDDeviceKey key = { .bus = bus, .devfn = devfn };
     uint32_t vdevice_id;
 
-    /* TODO: This logic works for now, need careful review */
-    if (bridge && object_dynamic_cast(OBJECT(bridge), TYPE_PCI_BRIDGE))
-        amd_idev->gdevid = pci_requester_id(bridge) + 0x100;
-    else
-        amd_idev->gdevid = PCI_BUILD_BDF(pci_bus_num(amd_idev->bus),
-                                         amd_idev->devfn);
+    amd_idev = g_hash_table_lookup(s->iommufd_dev_hash, &key);
+    if (!amd_idev) {
+        error_setg(errp, "No host IOMMU device for %02x:%02x.%x",
+                   pci_bus_num(bus), PCI_SLOT(devfn), PCI_FUNC(devfn));
+        return false;
+    }
+
+    idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+
+    /* vDEVICE already allocated for this device, nothing to do */
+    if (idev->vdevice) {
+        return true;
+    }
+
+    /* The svIOMMU must be initialized before allocating a vDEVICE */
+    if (!s->viommu.viommu_id) {
+        error_setg(errp, "svIOMMU instance is not initialized yet");
+        return false;
+    }
+
+    amd_idev->gdevid = PCI_BUILD_BDF(pci_bus_num(amd_idev->bus),
+                                     amd_idev->devfn);
 
     if (!iommufd_backend_alloc_vdev(s->iommufd, idev->devid,
                                     s->viommu.viommu_id, amd_idev->gdevid,
-                                    &vdevice_id, &local_err)) {
-        error_reportf_err(local_err, "Failed to allocate a vDEVICE: ");
-        exit (1);
+                                    &vdevice_id, errp)) {
+        error_prepend(errp, "Failed to allocate a vDEVICE (gdevid=0x%x): ",
+                      amd_idev->gdevid);
+        return false;
     }
 
     idev->vdevice = g_new0(IOMMUFDVdev, 1);
@@ -331,11 +349,8 @@ static void amdvi_alloc_vdev(gpointer key, gpointer value, gpointer user_data)
     idev->vdevice->viommu = &s->viommu;
 
     trace_amd_sviommu_alloc_vdev(amd_idev->gdevid, vdevice_id);
-}
 
-static void amdvi_setup_vdevice(AMDSVIOMMUState *s)
-{
-    g_hash_table_foreach(s->iommufd_dev_hash, amdvi_alloc_vdev, NULL);
+    return true;
 }
 
 static bool amd_sviommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
@@ -460,7 +475,6 @@ static void amd_sviommu_state_change(AMDSVIOMMUState *s)
 
         s->viommu.s2_hwpt_id = hwpt_id;
         amdvi_setup_sviommu(s, amd_idev);
-        amdvi_setup_vdevice(s);
         break;
     }
 
@@ -495,6 +509,7 @@ static const PCIIOMMUOps amd_sviommu_pci_ops = {
     .get_address_space = amd_sviommu_get_address_space,
     .set_iommu_device = amd_sviommu_set_iommu_device,
     .unset_iommu_device = amd_sviommu_unset_iommu_device,
+    .config_iommu_device = amdvi_setup_vdevice,
     .get_x86_iommu = amd_sviommu_get_x86_iommu,
     .get_viommu_flags = amd_sviommu_get_viommu_flags,
 };
