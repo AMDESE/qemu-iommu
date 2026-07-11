@@ -873,20 +873,27 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
     IOMMUFDBackend *iommufd = vbasedev->iommufd;
 
     if (!idev->vdevice && !idev->tdi_bound) {
-        uint32_t virt_id = pci_get_bdf(&vfio_pci_dev->pdev);
-        uint32_t vdevice_id;
+        if (viommu_present(vbasedev)) {
+            if (!pci_device_config_iommu_device(&vfio_pci_dev->pdev, errp)) {
+                error_prepend(errp, "Failed to configure vIOMMU device");
+                return -1;
+            }
+        } else if (!idev->vdevice && !idev->tdi_bound) {
+            uint32_t virt_id = pci_get_bdf(&vfio_pci_dev->pdev);
+            uint32_t vdevice_id;
 
-        if (!iommufd_backend_alloc_vdev(iommufd, idev->devid,
-                                        iommufd->viommu->viommu_id, virt_id,
-                                        &vdevice_id, errp)) {
-            return -1;
+            if (!iommufd_backend_alloc_vdev(iommufd, idev->devid,
+                                            iommufd->viommu->viommu_id, virt_id,
+                                            &vdevice_id, errp)) {
+                return -1;
+            }
+
+            idev->vdevice = g_new0(IOMMUFDVdev, 1);
+            idev->vdevice->vdevice_id = vdevice_id;
+            idev->vdevice->virt_id = virt_id;
+            idev->vdevice->idev = idev;
+            idev->vdevice->viommu = iommufd->viommu;
         }
-
-        idev->vdevice = g_new0(IOMMUFDVdev, 1);
-        idev->vdevice->vdevice_id = vdevice_id;
-        idev->vdevice->virt_id = virt_id;
-        idev->vdevice->idev = idev;
-        idev->vdevice->viommu = iommufd->viommu;
     }
 
     return iommufd_backend_tsm_bind(idev->vdevice, kvmfd);
