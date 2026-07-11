@@ -431,6 +431,24 @@ typedef struct PCIIOMMUOps {
      */
     void (*unset_iommu_device)(PCIBus *bus, void *opaque, int devfn);
     /**
+     * @config_iommu_device: configure the vIOMMU representation of a device.
+     *
+     * Optional callback, used by a vIOMMU to lazily configure per-device
+     * resources (e.g. an iommufd vDEVICE) once the correct BDF is known,
+     *
+     * @bus: the #PCIBus of the PCI device.
+     *
+     * @opaque: the data passed to pci_setup_iommu().
+     *
+     * @devfn: device and function number of the PCI device.
+     *
+     * @errp: pass an Error out only when return false
+     *
+     * Returns: true if the device was configured or else false with errp set.
+     */
+    bool (*config_iommu_device)(PCIBus *bus, void *opaque, int devfn,
+                                Error **errp);
+    /**
      * @get_viommu_flags: get vIOMMU flags
      *
      * Optional callback, if not implemented, then vIOMMU doesn't support
@@ -462,6 +480,7 @@ AddressSpace *pci_device_iommu_address_space(PCIDevice *dev);
 bool pci_device_set_iommu_device(PCIDevice *dev, HostIOMMUDevice *hiod,
                                  Error **errp);
 void pci_device_unset_iommu_device(PCIDevice *dev);
+bool pci_device_config_iommu_device(PCIDevice *dev, Error **errp);
 
 /**
  * pci_device_get_viommu_flags: get vIOMMU flags.
