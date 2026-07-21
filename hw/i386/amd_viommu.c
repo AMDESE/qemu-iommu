@@ -8,9 +8,35 @@
 #include "hw/i386/pc.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_bridge.h"
+#include "hw/vfio/pci.h"
+#include "hw/core/iommu.h"
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
+
+static AddressSpace *amd_viommu_get_address_space(PCIBus *bus, void *opaque,
+                                                  int devfn)
+{
+    return &address_space_memory;
+}
+
+static int amd_viommu_get_x86_iommu(void *opaque, void **x86_iommu)
+{
+    AMDVIOMMUState *s = opaque;
+    *x86_iommu = X86_IOMMU_DEVICE(s);
+    return 0;
+}
+
+static uint64_t amd_viommu_get_viommu_flags(void *opaque)
+{
+    return VIOMMU_FLAG_WANT_NESTING_PARENT;
+}
+
+static const PCIIOMMUOps amd_viommu_pci_ops = {
+    .get_address_space = amd_viommu_get_address_space,
+    .get_x86_iommu = amd_viommu_get_x86_iommu,
+    .get_viommu_flags = amd_viommu_get_viommu_flags,
+};
 
 /* Use stub for now, future patches will add states to init here */
 static void amd_viommu_init(AMDVIOMMUState *s)
@@ -71,6 +97,7 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
     }
 
     amd_viommu_init(s);
+    pci_setup_iommu(s->ivrs_info.root_bus, &amd_viommu_pci_ops, s);
 }
 
 static const Property amd_viommu_properties[] = {
