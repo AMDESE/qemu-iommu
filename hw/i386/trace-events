@@ -120,6 +120,10 @@ amdvi_ir_delivery_mode(const char *str) "%s"
 amdvi_ir_irte_ga_val(uint64_t hi, uint64_t lo) "hi 0x%"PRIx64" lo 0x%"PRIx64
 amdvi_generate_msi_interrupt(const char *str) "Mode: %s"
 
+# amd_viommu.c
+amd_viommu_set_iommu_device(uint8_t bus, uint8_t slot, uint8_t func) "set host IOMMU device devid: %02x:%02x.%x"
+amd_viommu_unset_iommu_device(uint8_t bus, uint8_t slot, uint8_t func) "unset host IOMMU device devid: %02x:%02x.%x"
+
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
 vmport_command(unsigned char command) "command: 0x%02x"
