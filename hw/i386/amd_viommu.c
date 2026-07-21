@@ -13,6 +13,145 @@
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
+#include "trace.h"
+
+static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
+                                          int devfn)
+{
+    AMDVIOMMUState *s = opaque;
+    AMDDeviceKey key = {
+        .bus = bus,
+        .devfn = devfn,
+    };
+
+    if (!g_hash_table_lookup(s->iommufd_state.iommufd_dev_hash, &key)) {
+        return;
+    }
+
+    trace_amd_viommu_unset_iommu_device(pci_bus_num(bus), PCI_SLOT(devfn),
+                                        PCI_FUNC(devfn));
+
+    g_hash_table_remove(s->iommufd_state.iommufd_dev_hash, &key);
+}
+
+/*
+ * Return the canonical sysfs path of the physical IOMMU that owns @vdev,
+ * e.g. "/sys/class/iommu/ivhd1". Caller must g_free() the result.
+ *
+ * Requires @vdev->sysfsdev and kernel iommu probe (device must have
+ * .../iommu symlink — see Documentation/ABI/testing/sysfs-class-iommu).
+ */
+static char *amd_viommu_sysfs_phys_iommu_path(VFIODevice *vdev, Error **errp)
+{
+    g_autofree char *link = NULL;
+    char *canonical;
+    if (!vdev->sysfsdev) {
+        error_setg(errp, "no host sysfs path");
+        return NULL;
+    }
+    link = g_strdup_printf("%s/iommu", vdev->sysfsdev);
+    canonical = realpath(link, NULL);
+    if (!canonical) {
+        error_setg_errno(errp, errno, "no physical IOMMU sysfs link at %s",
+                         link);
+        return NULL;
+    }
+    return canonical;
+}
+
+static const char *amd_viommu_phys_iommu_name(const char *path)
+{
+    return path ? g_path_get_basename(path) : "unknown";
+}
+
+static bool verify_device_physical_iommu(AMDVIOMMUState *s, VFIODevice *vdev,
+                                         Error **errp)
+{
+    g_autofree char *phys_iommu_path;
+
+    phys_iommu_path = amd_viommu_sysfs_phys_iommu_path(vdev, errp);
+    if (!phys_iommu_path) {
+        /*
+         * Defer the verification to kernel, the vdevice alloc will fail if
+         * the device does not belong to given iommu.
+         */
+        warn_report("amd-viommu: cannot verify physical IOMMU for device %s: %s",
+                    vdev->name, error_get_pretty(*errp));
+        error_free(*errp);
+        *errp = NULL;
+    } else if (!s->phys_iommu_path) {
+        s->phys_iommu_path = g_steal_pointer(&phys_iommu_path);
+    } else if (strcmp(s->phys_iommu_path, phys_iommu_path)) {
+        error_setg(errp,
+                   "device %s is on host IOMMU %s, but amd-viommu "
+                   "already has devices on %s",
+                   vdev->name,
+                   amd_viommu_phys_iommu_name(phys_iommu_path),
+                   amd_viommu_phys_iommu_name(s->phys_iommu_path));
+        return false;
+    }
+
+    return true;
+}
+
+static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
+                                   HostIOMMUDevice *hiod, Error **errp)
+{
+    AMDVIOMMUState *s = opaque;
+    AMDIOMMUFDDevice *amd_idev;
+    AMDIOMMUFDState *iommufd_state = &s->iommufd_state;
+    AMDDeviceKey *new_key;
+    AMDDeviceKey key = { .bus = bus, .devfn = devfn };
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(hiod);
+    VFIODevice *vdev = hiod->agent;
+
+    assert(hiod);
+    assert(vdev);
+
+    trace_amd_viommu_set_iommu_device(pci_bus_num(bus), PCI_SLOT(devfn),
+                                      PCI_FUNC(devfn));
+
+    if (hiod->caps.type != IOMMU_HW_INFO_TYPE_AMD) {
+        error_setg(errp, "IOMMU hardware type %#x is not compatible", hiod->caps.type);
+        return false;
+    }
+
+    if (g_hash_table_lookup(iommufd_state->iommufd_dev_hash, &key)) {
+        error_setg(errp, "Host IOMMU device already exist");
+        return false;
+    }
+
+    if (!iommufd_state->iommufd) {
+        iommufd_state->iommufd = idev->iommufd;
+    } else if (iommufd_state->iommufd != idev->iommufd) {
+        error_setg(errp, "Devices attached to multiple iommufds are not allowed"
+                         "Under single amd-viommu");
+        return false;
+    }
+
+    if (!vdev->hwpt || !(vdev->hwpt->hwpt_flags & IOMMU_HWPT_ALLOC_NEST_PARENT)) {
+        error_setg(errp, "device %s missing VFIO nesting parent HWPT "
+                "(VIOMMU_FLAG_WANT_NESTING_PARENT)",
+                vdev->name);
+        return false;
+    }
+
+    if (!verify_device_physical_iommu(s, vdev, errp)) {
+        return false;
+    }
+
+    new_key = g_malloc(sizeof(AMDDeviceKey));
+    new_key->bus = bus;
+    new_key->devfn = devfn;
+
+    amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
+    amd_idev->viommu = s;
+    amd_idev->hiod = hiod;
+
+    g_hash_table_insert(iommufd_state->iommufd_dev_hash, new_key, amd_idev);
+
+    return true;
+}
 
 static AddressSpace *amd_viommu_get_address_space(PCIBus *bus, void *opaque,
                                                   int devfn)
@@ -34,6 +173,8 @@ static uint64_t amd_viommu_get_viommu_flags(void *opaque)
 
 static const PCIIOMMUOps amd_viommu_pci_ops = {
     .get_address_space = amd_viommu_get_address_space,
+    .set_iommu_device = amd_viommu_set_iommu_device,
+    .unset_iommu_device = amd_viommu_unset_iommu_device,
     .get_x86_iommu = amd_viommu_get_x86_iommu,
     .get_viommu_flags = amd_viommu_get_viommu_flags,
 };
@@ -41,6 +182,10 @@ static const PCIIOMMUOps amd_viommu_pci_ops = {
 /* Use stub for now, future patches will add states to init here */
 static void amd_viommu_init(AMDVIOMMUState *s)
 {
+    s->iommufd_state.iommufd_dev_hash = g_hash_table_new_full(
+                                                amd_iommu_device_key_fn,
+                                                amd_iommu_device_key_equal,
+                                                g_free, g_free);
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
