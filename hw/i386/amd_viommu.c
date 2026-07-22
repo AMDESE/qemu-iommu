@@ -16,6 +16,79 @@
 #include "amd_viommu.h"
 #include "trace.h"
 
+DEFINE_AMD_IOMMU_SET_QUAD(amd_viommu, AMDVIOMMUState);
+
+DEFINE_AMD_VIOMMU_READ(w, uint16_t, lduw_le_p)
+DEFINE_AMD_VIOMMU_READ(l, uint32_t, ldl_le_p)
+DEFINE_AMD_VIOMMU_READ(q, uint64_t, ldq_le_p)
+
+DEFINE_AMD_IOMMU_MMIO_REG_READ(amd_viommu, AMDVIOMMUState)
+
+DEFINE_AMD_VIOMMU_WRITE(w, uint16_t, lduw_le_p, stw_le_p)
+DEFINE_AMD_VIOMMU_WRITE(l, uint32_t, ldl_le_p, stl_le_p)
+DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
+
+DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
+
+static uint64_t amd_viommu_mmio_read(void *opaque, hwaddr addr, unsigned size)
+{
+    AMDVIOMMUState *s = opaque;
+
+    uint64_t val = -1;
+    if (addr + size > AMDVI_MMIO_SIZE) {
+        trace_amd_viommu_mmio_read_invalid(AMDVI_MMIO_SIZE, addr, size);
+        return (uint64_t)-1;
+    }
+
+    val = amd_viommu_mmio_reg_read(s, size, addr);
+    trace_amd_viommu_mmio_read(amdvi_mmio_get_name(addr), addr, size,
+                               addr & ~0x07);
+    return val;
+}
+
+static void amd_viommu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
+                             unsigned size)
+{
+    AMDVIOMMUState *s = opaque;
+
+    if (addr + size > AMDVI_MMIO_SIZE) {
+        trace_amd_viommu_mmio_write_invalid(AMDVI_MMIO_SIZE, addr, size, val);
+        return;
+    }
+
+    trace_amd_viommu_mmio_write(amdvi_mmio_get_name(addr), addr, size, val,
+                                addr & 0x07);
+
+    amd_viommu_mmio_reg_write(s, size, val, addr);
+}
+
+static void amd_viommu_init_mmio(AMDVIOMMUState *s)
+{
+    memset(s->mmior, 0, AMDVI_MMIO_SIZE);
+    memset(s->w1cmask, 0, AMDVI_MMIO_SIZE);
+    memset(s->romask, 0, AMDVI_MMIO_SIZE);
+
+    amd_viommu_set_quad(s, AMDVI_MMIO_EXT_FEATURES,
+                        0,
+                        0xffffffffffffffff, 0);
+    amd_viommu_set_quad(s, AMDVI_MMIO_STATUS, 0, 0x98, 0x67);
+}
+
+static const MemoryRegionOps mmio_mem_ops = {
+    .read = amd_viommu_mmio_read,
+    .write = amd_viommu_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+        .unaligned = false,
+    },
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+    }
+};
+
 static bool amd_viommu_init_accel_mmio(AMDVIOMMUState *s)
 {
     AMDIOMMUFDState *iommufd_state = &s->iommufd_state;
@@ -326,6 +399,8 @@ static void amd_viommu_init(AMDVIOMMUState *s)
     qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
 
     s->vf_mmio_page = NULL;
+
+    amd_viommu_init_mmio(s);
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
@@ -370,6 +445,12 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
 
     s->ivrs_info.root_bus = get_root_bus(iommu_bus);
     s->ivrs_info.base_addr = base_addr;
+
+    /* set up MMIO */
+    memory_region_init_io(&s->mr_mmio, OBJECT(s), &mmio_mem_ops, s,
+                          "amd-viommu-mmio", AMDVI_MMIO_SIZE);
+    memory_region_add_subregion(get_system_memory(), base_addr,
+                                &s->mr_mmio);
 
     /**
      * Pseudo address space under root PCI bus.

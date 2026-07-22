@@ -38,6 +38,11 @@ struct AMDVIOMMUState {
 
     MemoryRegion mr_vf_mmio;            /* Accelerated MMIO memory region */
     void *vf_mmio_page;
+
+    MemoryRegion mr_mmio;              /* MMIO region                  */
+    uint8_t mmior[AMDVI_MMIO_SIZE];    /* read/write MMIO              */
+    uint8_t w1cmask[AMDVI_MMIO_SIZE];  /* read/write 1 clear mask      */
+    uint8_t romask[AMDVI_MMIO_SIZE];   /* MMIO read/only mask          */
 };
 
 typedef struct AMDIOMMUFDDevice {
@@ -54,3 +59,9 @@ typedef struct AMDIOMMUFDDevice {
 
 #define AMD_VIOMMU_VF_MMIO_BASE     (0x2000)
 #define AMD_VIOMMU_VF_MMIO_SIZE     (0x1000)
+
+#define DEFINE_AMD_VIOMMU_READ(name, TYPE, LD)                                \
+    DEFINE_AMD_IOMMU_READ(amd_viommu_read, name, AMDVIOMMUState, TYPE, LD)
+
+#define DEFINE_AMD_VIOMMU_WRITE(name, TYPE, LD, ST)                           \
+    DEFINE_AMD_IOMMU_WRITE(amd_viommu_write, name, AMDVIOMMUState, TYPE, LD, ST)

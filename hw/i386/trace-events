@@ -127,6 +127,10 @@ amd_viommu_efr(uint64_t host_efr, uint64_t guest_efr) "host efr 0x%"PRIx64" gues
 amd_viommu_init_iommufd(uint32_t viommu_id, uint32_t devid, uint32_t parent_hwpt_id) "viommu_id %u devid %u parent_hwpt_id %u"
 amd_viommu_vm_state_change(const char *state) "run state %s"
 amd_viommu_vf_mmio_map(uint64_t base, uint64_t size, uint64_t mmap_offset) "vf mmio base 0x%"PRIx64" size 0x%"PRIx64" mmap offset 0x%"PRIx64
+amd_viommu_mmio_read(const char *reg, uint64_t addr, unsigned size, uint64_t offset) "%s read addr 0x%"PRIx64", size %u offset 0x%"PRIx64
+amd_viommu_mmio_read_invalid(int max, uint64_t addr, unsigned size) "error: addr outside region (max 0x%x): read addr 0x%"PRIx64", size %u"
+amd_viommu_mmio_write(const char *reg, uint64_t addr, unsigned size, uint64_t val, uint64_t offset) "%s write addr 0x%"PRIx64", size %u, val 0x%"PRIx64", offset 0x%"PRIx64
+amd_viommu_mmio_write_invalid(int max, uint64_t addr, unsigned size, uint64_t val) "error: addr outside region (max 0x%x): write addr 0x%"PRIx64", size %u, val 0x%"PRIx64
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
