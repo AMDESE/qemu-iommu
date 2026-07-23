@@ -254,4 +254,10 @@ struct AMDVIState {
    AMDIVRSInfo ivrs_info;
 };
 
+#define DEFINE_AMDVI_READ(name, TYPE, LD)                                     \
+    DEFINE_AMD_IOMMU_READ(amdvi_read, name, AMDVIState, TYPE, LD)
+
+#define DEFINE_AMDVI_WRITE(name, TYPE, LD, ST)                                \
+    DEFINE_AMD_IOMMU_WRITE(amdvi_write, name, AMDVIState, TYPE, LD, ST)
+
 #endif
