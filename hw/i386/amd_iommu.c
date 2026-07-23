@@ -142,14 +142,26 @@ static uint64_t amdvi_extended_feature_register(X86IOMMUState *x86_iommu)
     return feature;
 }
 
-/* configure MMIO registers at startup/reset */
+DEFINE_AMD_IOMMU_SET_QUAD(amdvi, AMDVIState);
+
+DEFINE_AMDVI_READ(w, uint16_t, lduw_le_p)
+DEFINE_AMDVI_READ(l, uint32_t, ldl_le_p)
+DEFINE_AMDVI_READ(q, uint64_t, ldq_le_p)
+
+DEFINE_AMD_IOMMU_MMIO_REG_READ(amdvi, AMDVIState)
+
+DEFINE_AMDVI_WRITE(w, uint16_t, lduw_le_p, stw_le_p)
+DEFINE_AMDVI_WRITE(l, uint32_t, ldl_le_p, stl_le_p)
+DEFINE_AMDVI_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
+
+DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amdvi, AMDVIState)
+
 /* internal write */
 static void amdvi_writeq_raw(AMDVIState *s, hwaddr addr, uint64_t val)
 {
     stq_le_p(&s->mmior[addr], val);
 }
 
-/* external write */
 /* AND a 64-bit register with a 64-bit value */
 static bool amdvi_test_mask(AMDVIState *s, hwaddr addr, uint64_t val)
 {
@@ -1554,13 +1566,7 @@ static uint64_t amdvi_mmio_read(void *opaque, hwaddr addr, unsigned size)
         return (uint64_t)-1;
     }
 
-    if (size == 2) {
-        val = amdvi_readw(s, addr);
-    } else if (size == 4) {
-        val = amdvi_readl(s, addr);
-    } else if (size == 8) {
-        val = amdvi_readq(s, addr);
-    }
+    val = amdvi_mmio_reg_read(s, size, addr);
     trace_amdvi_mmio_read(amdvi_mmio_get_name(addr), addr, size, addr & ~0x07);
 
     return val;

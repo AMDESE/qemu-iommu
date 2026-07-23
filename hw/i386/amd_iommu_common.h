@@ -149,20 +149,69 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
 
+#define DEFINE_AMD_IOMMU_SET_QUAD(prefix, IOMMUTYPE) \
+static void glue(prefix, _set_quad)(IOMMUTYPE *s, hwaddr addr, uint64_t val,  \
+                                    uint64_t romask, uint64_t w1cmask)        \
+{                                                                             \
+    stq_le_p(&s->mmior[addr], val);                                           \
+    stq_le_p(&s->romask[addr], romask);                                       \
+    stq_le_p(&s->w1cmask[addr], w1cmask);                                     \
+}
+
+#define DEFINE_AMD_IOMMU_READ(prefix, name, IOMMUTYPE, TYPE, LD)              \
+static TYPE glue(prefix, name)(IOMMUTYPE *s, hwaddr addr)                     \
+{                                                                             \
+    return LD(&s->mmior[addr]);                                               \
+}
+
+#define DEFINE_AMD_IOMMU_MMIO_REG_READ(prefix, IOMMUTYPE)                     \
+static uint64_t glue(prefix, _mmio_reg_read)(IOMMUTYPE *s, unsigned size,     \
+                                         hwaddr addr)                         \
+{                                                                             \
+    if (size == 2) {                                                          \
+        return glue(prefix, _readw)(s, addr);                                 \
+    } else if (size == 4) {                                                   \
+        return glue(prefix, _readl)(s, addr);                                 \
+    } else if (size == 8) {                                                   \
+        return glue(prefix, _readq)(s, addr);                                 \
+    }                                                                         \
+    return -1;                                                                \
+}
+
+#define DEFINE_AMD_IOMMU_WRITE(prefix, name, IOMMUTYPE, TYPE, LD, ST)         \
+static void glue(prefix, name)(IOMMUTYPE *s, hwaddr addr, TYPE val)           \
+{                                                                             \
+    TYPE romask = LD(&s->romask[addr]);                                       \
+    TYPE w1cmask = LD(&s->w1cmask[addr]);                                     \
+    TYPE oldval = LD(&s->mmior[addr]);                                        \
+    TYPE oldval_preserved = oldval & (romask | w1cmask);                      \
+    TYPE newval_write = val & ~romask;                                        \
+    TYPE newval_w1c_set = val & w1cmask;                                      \
+                                                                              \
+    ST(&s->mmior[addr],                                                       \
+       (oldval_preserved | newval_write) & ~newval_w1c_set);                  \
+}
+
+#define DEFINE_AMD_IOMMU_MMIO_REG_WRITE(prefix, IOMMUTYPE)                    \
+static void glue(prefix, _mmio_reg_write)(IOMMUTYPE *s, unsigned size,        \
+                                            uint64_t val, hwaddr addr)        \
+{                                                                             \
+    if (size == 2) {                                                          \
+        glue(prefix, _writew)(s, addr, val);                                  \
+    } else if (size == 4) {                                                   \
+        glue(prefix, _writel)(s, addr, val);                                  \
+    } else if (size == 8) {                                                   \
+        glue(prefix, _writeq)(s, addr, val);                                  \
+    }                                                                         \
+}
+
 typedef struct AMDDeviceKey {
     PCIBus *bus;
     uint8_t devfn;
 } AMDDeviceKey;
 
-typedef struct AMDVIState AMDVIState;
-void amdvi_set_quad(AMDVIState *s, hwaddr addr, uint64_t val,
-                    uint64_t romask, uint64_t w1cmask);
-uint16_t amdvi_readw(AMDVIState *s, hwaddr addr);
-uint32_t amdvi_readl(AMDVIState *s, hwaddr addr);
-uint64_t amdvi_readq(AMDVIState *s, hwaddr addr);
-void amdvi_writew(AMDVIState *s, hwaddr addr, uint16_t val);
-void amdvi_writel(AMDVIState *s, hwaddr addr, uint32_t val);
-void amdvi_writeq(AMDVIState *s, hwaddr addr, uint64_t val);
-void amdvi_mmio_reg_write(AMDVIState *s, unsigned size, uint64_t val, hwaddr addr);
+PCIBus *get_root_bus(struct PCIBus *bus);
+guint amd_iommu_device_key_fn(gconstpointer v);
+gboolean amd_iommu_device_key_equal(gconstpointer v1, gconstpointer v2);
 
 #endif /* HW_I386_AMD_IOMMU_COMMON_H */
