@@ -1600,24 +1600,23 @@ static inline void amdvi_handle_devtab_write(AMDVIState *s)
 static inline void amdvi_handle_cmdhead_write(AMDVIState *s)
 {
     s->cmdbuf_head = amdvi_readq(s, AMDVI_MMIO_COMMAND_HEAD)
-                     & AMDVI_MMIO_CMDBUF_HEAD_MASK
+                     & AMDVI_MMIO_BUF_HEAD_MASK
                      & (s->cmdbuf_len * AMDVI_COMMAND_SIZE - 1);
     amdvi_cmdbuf_run(s);
 }
 
 static inline void amdvi_handle_cmdbase_write(AMDVIState *s)
 {
-    s->cmdbuf = amdvi_readq(s, AMDVI_MMIO_COMMAND_BASE)
-                & AMDVI_MMIO_CMDBUF_BASE_MASK;
-    s->cmdbuf_len = 1UL << (amdvi_readq(s, AMDVI_MMIO_CMDBUF_SIZE_BYTE)
-                    & AMDVI_MMIO_CMDBUF_SIZE_MASK);
+    uint64_t val = amdvi_readq(s, AMDVI_MMIO_COMMAND_BASE);
+    s->cmdbuf = (val & AMDVI_MMIO_BUF_BASE_MASK);
+    s->cmdbuf_len = AMDVI_MMIO_GET_BUF_SIZE(val);
     s->cmdbuf_head = s->cmdbuf_tail = 0;
 }
 
 static inline void amdvi_handle_cmdtail_write(AMDVIState *s)
 {
     s->cmdbuf_tail = amdvi_readq(s, AMDVI_MMIO_COMMAND_TAIL)
-                     & AMDVI_MMIO_CMDBUF_TAIL_MASK
+                     & AMDVI_MMIO_BUF_TAIL_MASK
                      & (s->cmdbuf_len * AMDVI_COMMAND_SIZE - 1);
     amdvi_cmdbuf_run(s);
 }
@@ -1637,9 +1636,8 @@ static inline void amdvi_handle_evtbase_write(AMDVIState *s)
         /* Do not reset if eventlog interrupt bit is set*/
         return;
 
-    s->evtlog = val & AMDVI_MMIO_EVTLOG_BASE_MASK;
-    s->evtlog_len = 1UL << (amdvi_readq(s, AMDVI_MMIO_EVTLOG_SIZE_BYTE)
-                    & AMDVI_MMIO_EVTLOG_SIZE_MASK);
+    s->evtlog = val & AMDVI_MMIO_BUF_BASE_MASK;
+    s->evtlog_len = AMDVI_MMIO_GET_BUF_SIZE(val);
 
     /* clear tail and head pointer to 0 when event base is updated */
     s->evtlog_tail = s->evtlog_head = 0;
@@ -1650,33 +1648,32 @@ static inline void amdvi_handle_evtbase_write(AMDVIState *s)
 static inline void amdvi_handle_evttail_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_EVENT_TAIL);
-    s->evtlog_tail = val & AMDVI_MMIO_EVTLOG_TAIL_MASK;
+    s->evtlog_tail = val & AMDVI_MMIO_BUF_TAIL_MASK;
 }
 
 static inline void amdvi_handle_evthead_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_EVENT_HEAD);
-    s->evtlog_head = val & AMDVI_MMIO_EVTLOG_HEAD_MASK;
+    s->evtlog_head = val & AMDVI_MMIO_BUF_HEAD_MASK;
 }
 
 static inline void amdvi_handle_pprbase_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_PPR_BASE);
-    s->ppr_log = val & AMDVI_MMIO_PPRLOG_BASE_MASK;
-    s->pprlog_len = 1UL << (amdvi_readq(s, AMDVI_MMIO_PPRLOG_SIZE_BYTE)
-                    & AMDVI_MMIO_PPRLOG_SIZE_MASK);
+    s->ppr_log = val & AMDVI_MMIO_BUF_BASE_MASK;
+    s->pprlog_len = AMDVI_MMIO_GET_BUF_SIZE(val);
 }
 
 static inline void amdvi_handle_pprhead_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_PPR_HEAD);
-    s->pprlog_head = val & AMDVI_MMIO_PPRLOG_HEAD_MASK;
+    s->pprlog_head = val & AMDVI_MMIO_BUF_HEAD_MASK;
 }
 
 static inline void amdvi_handle_pprtail_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_PPR_TAIL);
-    s->pprlog_tail = val & AMDVI_MMIO_PPRLOG_TAIL_MASK;
+    s->pprlog_tail = val & AMDVI_MMIO_BUF_TAIL_MASK;
 }
 
 /* FIXME: something might go wrong if System Software writes in chunks

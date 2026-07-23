@@ -63,7 +63,7 @@ static void test_cmdbuf_head_wrap(void)
 
     /* after consuming all entries the IOMMU must wrap CmdHeadPtr to 0 */
     head = amdvi_reg_readq(s, AMDVI_MMIO_COMMAND_HEAD);
-    g_assert((head & AMDVI_MMIO_CMDBUF_HEAD_MASK) == 0);
+    g_assert((head & AMDVI_MMIO_BUF_HEAD_MASK) == 0);
 
     qtest_quit(s);
 }
