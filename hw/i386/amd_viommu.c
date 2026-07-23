@@ -32,6 +32,123 @@ DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
 
 DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
 
+static uint32_t amd_viommu_get_cmdbuf_flag(AMDVIOMMUState *s)
+{
+    uint64_t ctrl = amd_viommu_readq(s, AMDVI_MMIO_CONTROL);
+    uint32_t flags = 0;
+
+    if (ctrl & AMDVI_MMIO_CONTROL_CMDBUFLEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_CMDBUF_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_COMWAITINTEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN;
+
+    return flags;
+}
+
+static uint32_t amd_viommu_get_evtbuf_flag(AMDVIOMMUState *s)
+{
+    uint64_t ctrl = amd_viommu_readq(s, AMDVI_MMIO_CONTROL);
+    uint32_t flags = 0;
+
+    if (ctrl & AMDVI_MMIO_CONTROL_EVENTLOGEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_EVT_LOG_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_EVENTINTEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN;
+
+    return flags;
+}
+
+static uint32_t amd_viommu_get_pprbuf_flag(AMDVIOMMUState *s)
+{
+    uint64_t ctrl = amd_viommu_readq(s, AMDVI_MMIO_CONTROL);
+    uint32_t flags = 0;
+
+    if (ctrl & AMDVI_MMIO_CONTROL_PPRLOGEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPRLOG_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_PPRINTEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPRINT_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_PPREN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPR_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_PPRAUTORSPEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_BLKSTOPMRKEN)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_BLKSTOPMRK_EN;
+    if (ctrl & AMDVI_MMIO_CONTROL_PPRAUTORSPAON)
+        flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON;
+
+    return flags;
+}
+
+static void amd_viommu_dealloc_queue(AMDVIOMMUState *s,
+                                     AMDVIOMMUHwQueue *queue)
+{
+    if (!queue->enable_hw_queue) {
+        return;
+    }
+
+    trace_amd_viommu_dealloc_hw_queue(queue->type, queue->hw_queue_id);
+
+    iommufd_backend_free_id(s->iommufd_state.iommufd, queue->hw_queue_id);
+    queue->hw_queue_id = 0;
+    queue->enable_hw_queue = false;
+}
+
+static void amd_viommu_alloc_queue(AMDVIOMMUState *s, AMDVIOMMUHwQueue *queue)
+{
+    uint32_t flags = 0;
+    uint64_t mmio_val = 0;
+    uint64_t addr, len;
+    const char *queue_name = "";
+    Error *local_err = NULL;
+
+    switch (queue->type) {
+    case IOMMU_HW_QUEUE_TYPE_AMD_CMD:
+        flags = amd_viommu_get_cmdbuf_flag(s);
+        mmio_val = amd_viommu_readq(s, AMDVI_MMIO_COMMAND_BASE);
+        queue_name = "COMMAND";
+        break;
+    case IOMMU_HW_QUEUE_TYPE_AMD_EVT:
+        flags = amd_viommu_get_evtbuf_flag(s);
+        mmio_val = amd_viommu_readq(s, AMDVI_MMIO_EVENT_BASE);
+        queue_name = "EVENT";
+        break;
+    case IOMMU_HW_QUEUE_TYPE_AMD_PPR:
+        flags = amd_viommu_get_pprbuf_flag(s);
+        mmio_val = amd_viommu_readq(s, AMDVI_MMIO_PPR_BASE);
+        queue_name = "PPR";
+        break;
+    }
+
+    addr = mmio_val & AMDVI_MMIO_BUF_BASE_MASK;
+    len = (mmio_val & AMDVI_MMIO_BUF_SIZE_MASK) >> AMDVI_MMIO_BUF_SIZE_SHIFT;
+
+    if (queue->enable_hw_queue && queue->addr == addr && queue->len == len &&
+        queue->flags == flags) {
+        return;
+    }
+
+    if (queue->enable_hw_queue) {
+        amd_viommu_dealloc_queue(s, queue);
+    }
+
+    if (!iommufd_backend_alloc_hw_queue(s->iommufd_state.iommufd,
+                                        s->iommufd_state.viommu_id,
+                                        queue->type, 0, addr, len, flags,
+                                        &queue->hw_queue_id, &local_err)) {
+        error_reportf_err(local_err, "Failed to allocate %s buffer: ",
+                          queue_name);
+        return;
+    }
+
+    queue->addr = addr;
+    queue->len = len;
+    queue->flags = flags;
+    queue->enable_hw_queue = true;
+
+    trace_amd_viommu_alloc_hw_queue(queue_name, addr, len, flags,
+                                    queue->hw_queue_id);
+}
+
 static void amd_viommu_alloc_vdev(gpointer key, gpointer value, gpointer user_data)
 {
     AMDDeviceKey *bus_devfn = key;
@@ -85,6 +202,7 @@ static inline void amd_viommu_handle_control_write(AMDVIOMMUState *s)
 {
     unsigned long ctrl = amd_viommu_readq(s, AMDVI_MMIO_CONTROL);
     bool enable_iommu = !!(ctrl & AMDVI_MMIO_CONTROL_AMDVIEN);
+    bool enable_hw_queue;
 
 #define CONTROL_BIT_ENABLED(state, name) (state.name == 0 && name == 1)
 #define CONTROL_BIT_DISABLED(state, name) (state.name == 1 && name == 0)
@@ -97,6 +215,27 @@ static inline void amd_viommu_handle_control_write(AMDVIOMMUState *s)
     } else if (CONTROL_BIT_DISABLED(s->iommufd_state, enable_iommu)) {
         amd_viommu_dealloc_vdev_all(&s->iommufd_state);
         s->iommufd_state.enable_iommu = false;
+    }
+
+    enable_hw_queue = !!(ctrl & AMDVI_MMIO_CONTROL_CMDBUFLEN);
+    if (CONTROL_BIT_ENABLED(s->cmd_queue, enable_hw_queue)) {
+        amd_viommu_alloc_queue(s, &s->cmd_queue);
+    } else if (CONTROL_BIT_DISABLED(s->cmd_queue, enable_hw_queue)) {
+        amd_viommu_dealloc_queue(s, &s->cmd_queue);
+    }
+
+    enable_hw_queue = !!(ctrl & AMDVI_MMIO_CONTROL_EVENTLOGEN);
+    if (CONTROL_BIT_ENABLED(s->evt_queue, enable_hw_queue)) {
+        amd_viommu_alloc_queue(s, &s->evt_queue);
+    } else if (CONTROL_BIT_DISABLED(s->evt_queue, enable_hw_queue)) {
+        amd_viommu_dealloc_queue(s, &s->evt_queue);
+    }
+
+    enable_hw_queue = !!(ctrl & AMDVI_MMIO_CONTROL_PPRLOGEN);
+    if (CONTROL_BIT_ENABLED(s->ppr_queue, enable_hw_queue)) {
+        amd_viommu_alloc_queue(s, &s->ppr_queue);
+    } else if (CONTROL_BIT_DISABLED(s->ppr_queue, enable_hw_queue)) {
+        amd_viommu_dealloc_queue(s, &s->ppr_queue);
     }
 
 #undef CONTROL_BIT_ENABLED
@@ -469,6 +608,14 @@ static const PCIIOMMUOps amd_viommu_pci_ops = {
     .get_viommu_flags = amd_viommu_get_viommu_flags,
 };
 
+static void amd_viommu_init_queue(AMDVIOMMUHwQueue *queue, uint32_t type)
+{
+    queue->hw_queue_id = 0;
+    queue->enable_hw_queue = false;
+    queue->type = type;
+    queue->flags = 0;
+}
+
 /* Use stub for now, future patches will add states to init here */
 static void amd_viommu_init(AMDVIOMMUState *s)
 {
@@ -488,6 +635,10 @@ static void amd_viommu_init(AMDVIOMMUState *s)
     s->vf_mmio_page = NULL;
 
     amd_viommu_init_mmio(s);
+
+    amd_viommu_init_queue(&s->cmd_queue, IOMMU_HW_QUEUE_TYPE_AMD_CMD);
+    amd_viommu_init_queue(&s->evt_queue, IOMMU_HW_QUEUE_TYPE_AMD_EVT);
+    amd_viommu_init_queue(&s->ppr_queue, IOMMU_HW_QUEUE_TYPE_AMD_PPR);
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)

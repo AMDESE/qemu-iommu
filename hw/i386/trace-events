@@ -134,6 +134,8 @@ amd_viommu_mmio_write_invalid(int max, uint64_t addr, unsigned size, uint64_t va
 amd_viommu_control_write(uint64_t val) "MMIO_CONTROL 0x%"PRIx64
 amd_viommu_alloc_vdev(uint8_t bus, uint8_t slot, uint8_t func, uint32_t vdev_id) "vdev for devid: %02x:%02x.%x vdev_id %u"
 amd_viommu_dealloc_vdev(uint32_t vdev_id) "vdev_id %u"
+amd_viommu_alloc_hw_queue(const char *queue, uint64_t addr, uint64_t len, uint32_t flags, uint32_t hw_queue_id) "%s queue base 0x%"PRIx64" len 0x%"PRIx64" flags 0x%"PRIx32" hw_queue_id %u"
+amd_viommu_dealloc_hw_queue(uint32_t type, uint32_t hw_queue_id) "queue type %u hw_queue_id %u"
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"

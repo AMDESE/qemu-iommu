@@ -15,6 +15,15 @@
 #define TYPE_AMD_VIOMMU_DEVICE "amd-viommu"
 OBJECT_DECLARE_SIMPLE_TYPE(AMDVIOMMUState, AMD_VIOMMU_DEVICE)
 
+typedef struct AMDVIOMMUHwQueue {
+    bool enable_hw_queue;
+    uint32_t hw_queue_id;
+    uint64_t addr;              /* Queue Base address */
+    uint32_t type;              /* Queue type */
+    uint8_t len;                /* Queue length       */
+    uint32_t flags;             /* Queue flags        */
+} AMDVIOMMUHwQueue;
+
 typedef struct AMDIOMMUFDState {
     IOMMUFDBackend *iommufd;                /* IOMMUFD backend object       */
     uint32_t viommu_id;                     /* virtual IOMMU ID             */
@@ -44,6 +53,10 @@ struct AMDVIOMMUState {
     uint8_t mmior[AMDVI_MMIO_SIZE];    /* read/write MMIO              */
     uint8_t w1cmask[AMDVI_MMIO_SIZE];  /* read/write 1 clear mask      */
     uint8_t romask[AMDVI_MMIO_SIZE];   /* MMIO read/only mask          */
+
+    AMDVIOMMUHwQueue cmd_queue;
+    AMDVIOMMUHwQueue evt_queue;
+    AMDVIOMMUHwQueue ppr_queue;
 };
 
 typedef struct AMDIOMMUFDDevice {
