@@ -22,6 +22,7 @@ typedef struct AMDIOMMUFDState {
     struct iommu_viommu_amd iommufd_viommu_amd;
     uint32_t parent_hwpt_id;                /* HWPT ID of the parent domain */
     uint32_t devid;                         /* IOMMUFD device ID            */
+    bool enable_iommu;
 } AMDIOMMUFDState;
 
 struct AMDVIOMMUState {
@@ -48,6 +49,7 @@ struct AMDVIOMMUState {
 typedef struct AMDIOMMUFDDevice {
     AMDVIOMMUState *viommu;
     HostIOMMUDevice *hiod;
+    uint32_t vdevice_id;
 } AMDIOMMUFDDevice;
 
 #define AMD_VIOMMU_SUPPORTED_EFR \
