@@ -4,9 +4,112 @@
 #include "hw/pci/pci_device.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
+#include "hw/i386/pc.h"
+#include "hw/pci/pci_bus.h"
+#include "hw/pci/pci_bridge.h"
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
+
+/* Use stub for now, future patches will add states to init here */
+static void amd_viommu_init(AMDVIOMMUState *s)
+{
+}
+
+static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
+{
+    AMDVIOMMUState *s = AMD_VIOMMU_DEVICE(dev);
+    MachineState *ms = MACHINE(qdev_get_machine());
+    X86MachineState *x86ms = X86_MACHINE(ms);
+    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+    PCIBus *iommu_bus;
+    uint64_t base_addr;
+    PCIDevice *pdev = NULL;
+    int ret;
+
+    if (!s->pci_id) {
+        error_setg(errp, "PCI device object not provided");
+        return;
+    }
+
+    ret = pci_qdev_find_device(s->pci_id, &pdev);
+
+    if (ret) {
+        error_setg(errp, "Cannot find PCI device '%s'", s->pci_id);
+        return;
+    }
+
+    if (!object_dynamic_cast(OBJECT(pdev), TYPE_AMD_VIOMMU_PCI)) {
+        error_setg(errp, "Device '%s' must be an AMDVI-PCI device type", s->pci_id);
+        return;
+    }
+
+    iommu_bus = pci_get_bus(pdev);
+    s->pci = AMD_VIOMMU_PCI(pdev);
+    s->ivrs_info.pci = s->pci;
+
+    base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index);
+
+    /* Set up PCI Capability base address */
+    pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_LOW,
+                 base_addr & MAKE_64BIT_MASK(14, 18));
+    pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_HIGH,
+                base_addr >> 32);
+
+    s->ivrs_info.root_bus = get_root_bus(iommu_bus);
+    s->ivrs_info.base_addr = base_addr;
+
+    /**
+     * Pseudo address space under root PCI bus.
+     * The linux kernel disables the intremap when it cannot find IOAPIC under
+     * AMD IOMMU IVRS, hence create a ioapic_as with root bus even though AMD
+     * IOMMU is not serving devices attached to root bus.
+     */
+    if (!x86ms->ioapic_iommu && x86_iommu_ir_supported(X86_IOMMU_DEVICE(s))) {
+        x86ms->ioapic_iommu = x86_iommu;
+    }
+
+    amd_viommu_init(s);
+}
+
+static const Property amd_viommu_properties[] = {
+    DEFINE_PROP_STRING("pci-id", AMDVIOMMUState, pci_id),
+};
+
+static const VMStateDescription vmstate_amd_viommu_sysbus = {
+    .name = "amd-viommu",
+    .unmigratable = 1
+};
+
+/* Stub call, will be filled later on */
+static void amd_viommu_sysbus_reset(DeviceState *dev)
+{
+}
+
+static void amd_viommu_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    X86IOMMUClass *dc_class = X86_IOMMU_DEVICE_CLASS(klass);
+
+    device_class_set_legacy_reset(dc, amd_viommu_sysbus_reset);
+    dc->vmsd = &vmstate_amd_viommu_sysbus;
+    dc->hotpluggable = false;
+    dc_class->realize = amd_viommu_sysbus_realize;
+
+    /* Supported by the pc-q35-* machine types */
+    dc->user_creatable = true;
+    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    dc->desc = "AMD VIOMMU device";
+    device_class_set_props(dc, amd_viommu_properties);
+}
+
+static const TypeInfo amd_viommu = {
+    .name = TYPE_AMD_VIOMMU_DEVICE,
+    .parent = TYPE_X86_IOMMU_DEVICE,
+    .instance_size = sizeof(AMDVIOMMUState),
+    .class_init = amd_viommu_class_init
+};
 
 static void amd_viommu_pci_realize(PCIDevice *pdev, Error **errp)
 {
@@ -67,4 +170,5 @@ static const TypeInfo amd_viommu_pci= {
 __attribute__((unused)) static void amd_viommu_pci_register_types(void)
 {
     type_register_static(&amd_viommu_pci);
+    type_register_static(&amd_viommu);
 }
