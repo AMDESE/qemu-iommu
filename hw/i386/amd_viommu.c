@@ -11,6 +11,8 @@
 #include "hw/vfio/pci.h"
 #include "hw/core/iommu.h"
 #include "system/runstate.h"
+#include "hw/vfio/vfio-device.h"
+#include "hw/vfio/vfio-iommufd.h"
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
@@ -29,6 +31,77 @@ DEFINE_AMD_VIOMMU_WRITE(l, uint32_t, ldl_le_p, stl_le_p)
 DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
 
 DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
+
+static void amd_viommu_alloc_vdev(gpointer key, gpointer value, gpointer user_data)
+{
+    AMDDeviceKey *bus_devfn = key;
+    AMDIOMMUFDDevice *amd_idev = value;
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+    uint16_t bdf = PCI_BUILD_BDF(pci_bus_num(bus_devfn->bus), bus_devfn->devfn);
+    AMDIOMMUFDState *iommufd_state = &amd_idev->viommu->iommufd_state;
+    Error *local_err = NULL;
+
+    if (!iommufd_backend_alloc_vdev(idev->iommufd, idev->devid,
+                                    iommufd_state->viommu_id, bdf,
+                                    &amd_idev->vdevice_id, &local_err)) {
+        error_reportf_err(local_err,
+                          "Could not allocate vdevice for PCI DeviceID "
+                          "%02x:%02x.%01x: ",
+                          PCI_BUS_NUM(bdf), PCI_SLOT(bdf), PCI_FUNC(bdf));
+        exit(EXIT_FAILURE);
+    }
+
+    trace_amd_viommu_alloc_vdev(PCI_BUS_NUM(bdf), PCI_SLOT(bdf),
+                                PCI_FUNC(bdf), amd_idev->vdevice_id);
+}
+
+static void amd_viommu_alloc_vdev_all(AMDIOMMUFDState *s)
+{
+    g_hash_table_foreach(s->iommufd_dev_hash, amd_viommu_alloc_vdev, NULL);
+}
+
+static void amd_viommu_dealloc_vdev(gpointer key, gpointer value, gpointer user_data)
+{
+    AMDIOMMUFDDevice *amd_idev = value;
+
+    if (!amd_idev->vdevice_id) {
+        return;
+    }
+
+    trace_amd_viommu_dealloc_vdev(amd_idev->vdevice_id);
+
+    iommufd_backend_free_id(amd_idev->viommu->iommufd_state.iommufd,
+                            amd_idev->vdevice_id);
+    amd_idev->vdevice_id = 0;
+}
+
+static void amd_viommu_dealloc_vdev_all(AMDIOMMUFDState *s)
+{
+    g_hash_table_foreach(s->iommufd_dev_hash, amd_viommu_dealloc_vdev, NULL);
+}
+
+
+static inline void amd_viommu_handle_control_write(AMDVIOMMUState *s)
+{
+    unsigned long ctrl = amd_viommu_readq(s, AMDVI_MMIO_CONTROL);
+    bool enable_iommu = !!(ctrl & AMDVI_MMIO_CONTROL_AMDVIEN);
+
+#define CONTROL_BIT_ENABLED(state, name) (state.name == 0 && name == 1)
+#define CONTROL_BIT_DISABLED(state, name) (state.name == 1 && name == 0)
+
+    trace_amd_viommu_control_write(ctrl);
+
+    if (CONTROL_BIT_ENABLED(s->iommufd_state, enable_iommu)) {
+        amd_viommu_alloc_vdev_all(&s->iommufd_state);
+        s->iommufd_state.enable_iommu = true;
+    } else if (CONTROL_BIT_DISABLED(s->iommufd_state, enable_iommu)) {
+        amd_viommu_dealloc_vdev_all(&s->iommufd_state);
+        s->iommufd_state.enable_iommu = false;
+    }
+
+#undef CONTROL_BIT_ENABLED
+#undef CONTROL_BIT_DISABLED
+}
 
 static uint64_t amd_viommu_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -50,6 +123,7 @@ static void amd_viommu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
                              unsigned size)
 {
     AMDVIOMMUState *s = opaque;
+    unsigned long offset = addr & 0x07;
 
     if (addr + size > AMDVI_MMIO_SIZE) {
         trace_amd_viommu_mmio_write_invalid(AMDVI_MMIO_SIZE, addr, size, val);
@@ -57,9 +131,20 @@ static void amd_viommu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     }
 
     trace_amd_viommu_mmio_write(amdvi_mmio_get_name(addr), addr, size, val,
-                                addr & 0x07);
+                                offset);
 
     amd_viommu_mmio_reg_write(s, size, val, addr);
+    switch (addr & ~0x07) {
+    case AMDVI_MMIO_CONTROL:
+        /* FIXME - make sure System Software has finished writing incase
+         * it writes in chucks less than 8 bytes in a robust way.As for
+         * now, this hacks works for the linux driver
+         */
+        if (offset || (size == 8)) {
+            amd_viommu_handle_control_write(s);
+        }
+        break;
+    }
 }
 
 static void amd_viommu_init_mmio(AMDVIOMMUState *s)
@@ -351,6 +436,7 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
     amd_idev->viommu = s;
     amd_idev->hiod = hiod;
+    amd_idev->vdevice_id = 0;
 
     g_hash_table_insert(iommufd_state->iommufd_dev_hash, new_key, amd_idev);
 
@@ -396,6 +482,7 @@ static void amd_viommu_init(AMDVIOMMUState *s)
     s->iommufd_state.devid = 0;
     s->iommufd_state.viommu_id = 0;
     s->iommufd_state.parent_hwpt_id = 0;
+    s->iommufd_state.enable_iommu = false;
     qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
 
     s->vf_mmio_page = NULL;

@@ -131,6 +131,9 @@ amd_viommu_mmio_read(const char *reg, uint64_t addr, unsigned size, uint64_t off
 amd_viommu_mmio_read_invalid(int max, uint64_t addr, unsigned size) "error: addr outside region (max 0x%x): read addr 0x%"PRIx64", size %u"
 amd_viommu_mmio_write(const char *reg, uint64_t addr, unsigned size, uint64_t val, uint64_t offset) "%s write addr 0x%"PRIx64", size %u, val 0x%"PRIx64", offset 0x%"PRIx64
 amd_viommu_mmio_write_invalid(int max, uint64_t addr, unsigned size, uint64_t val) "error: addr outside region (max 0x%x): write addr 0x%"PRIx64", size %u, val 0x%"PRIx64
+amd_viommu_control_write(uint64_t val) "MMIO_CONTROL 0x%"PRIx64
+amd_viommu_alloc_vdev(uint8_t bus, uint8_t slot, uint8_t func, uint32_t vdev_id) "vdev for devid: %02x:%02x.%x vdev_id %u"
+amd_viommu_dealloc_vdev(uint32_t vdev_id) "vdev_id %u"
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
