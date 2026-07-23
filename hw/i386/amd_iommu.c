@@ -362,19 +362,17 @@ static void amdvi_log_pagetab_error(AMDVIState *s, uint16_t devid,
              PCI_STATUS_SIG_TARGET_ABORT);
 }
 
-
-
 static AMDVIAddressSpace *amdvi_as_lookup(AMDVIState *s, PCIBus *bus,
                                           uint8_t devfn)
 {
-    const AMDVIAsKey key = { .bus = bus, .devfn = devfn };
+    const AMDDeviceKey key = { .bus = bus, .devfn = devfn };
     return g_hash_table_lookup(s->address_spaces, &key);
 }
 
 static gboolean amdvi_find_as_by_devid(gpointer key, gpointer value,
                                        gpointer user_data)
 {
-    const AMDVIAsKey *as = key;
+    const AMDDeviceKey *as = key;
     const uint16_t *devidp = user_data;
 
     return *devidp == PCI_BUILD_BDF(pci_bus_num(as->bus), as->devfn);
@@ -2312,7 +2310,7 @@ static AddressSpace *amdvi_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
     char name[128];
     AMDVIState *s = opaque;
     AMDVIAddressSpace *amdvi_dev_as;
-    AMDVIAsKey *key;
+    AMDDeviceKey *key;
 
     amdvi_dev_as = amdvi_as_lookup(s, bus, devfn);
 
@@ -2321,7 +2319,7 @@ static AddressSpace *amdvi_host_dma_iommu(PCIBus *bus, void *opaque, int devfn)
         snprintf(name, sizeof(name), "amd_iommu_devfn_%d", devfn);
 
         amdvi_dev_as = g_new0(AMDVIAddressSpace, 1);
-        key = g_new0(AMDVIAsKey, 1);
+        key = g_new0(AMDDeviceKey, 1);
 
         amdvi_dev_as->bus = bus;
         amdvi_dev_as->devfn = (uint8_t)devfn;
@@ -2634,8 +2632,9 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     s->iotlb = g_hash_table_new_full(amdvi_iotlb_hash,
                                      amdvi_iotlb_equal, g_free, g_free);
 
-    s->address_spaces = g_hash_table_new_full(amdvi_as_hash,
-                                     amdvi_as_equal, g_free, g_free);
+    s->address_spaces = g_hash_table_new_full(amd_iommu_device_key_fn,
+                                              amd_iommu_device_key_equal,
+                                              g_free, g_free);
 
     /* set up MMIO */
     memory_region_init_io(&s->mr_mmio, OBJECT(s), &mmio_mem_ops, s,

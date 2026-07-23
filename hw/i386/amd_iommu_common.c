@@ -50,18 +50,18 @@ out:
     return bus;
 }
 
-guint amdvi_as_hash(gconstpointer v)
+guint amd_iommu_device_key_fn(gconstpointer v)
 {
-    const AMDVIAsKey *key = v;
+    const AMDDeviceKey *key = v;
     guint bus = (guint)(uintptr_t)key->bus;
 
     return (guint)(bus << 8 | (guint)key->devfn);
 }
 
-gboolean amdvi_as_equal(gconstpointer v1, gconstpointer v2)
+gboolean amd_iommu_device_key_equal(gconstpointer v1, gconstpointer v2)
 {
-    const AMDVIAsKey *key1 = v1;
-    const AMDVIAsKey *key2 = v2;
+    const AMDDeviceKey *key1 = v1;
+    const AMDDeviceKey *key2 = v2;
 
     return key1->bus == key2->bus && key1->devfn == key2->devfn;
 }

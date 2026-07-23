@@ -1,3 +1,6 @@
+#ifndef HW_I386_AMD_IOMMU_COMMON_H
+#define HW_I386_AMD_IOMMU_COMMON_H
+
 #include "hw/pci/pci.h"
 #include "qom/object.h"
 #include "hw/i386/x86-iommu.h"
@@ -146,14 +149,10 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
 
-typedef struct AMDVIAsKey {
+typedef struct AMDDeviceKey {
     PCIBus *bus;
     uint8_t devfn;
-} AMDVIAsKey;
-
-PCIBus *get_root_bus(struct PCIBus *bus);
-guint amdvi_as_hash(gconstpointer v);
-gboolean amdvi_as_equal(gconstpointer v1, gconstpointer v2);
+} AMDDeviceKey;
 
 typedef struct AMDVIState AMDVIState;
 void amdvi_set_quad(AMDVIState *s, hwaddr addr, uint64_t val,
@@ -165,3 +164,5 @@ void amdvi_writew(AMDVIState *s, hwaddr addr, uint16_t val);
 void amdvi_writel(AMDVIState *s, hwaddr addr, uint32_t val);
 void amdvi_writeq(AMDVIState *s, hwaddr addr, uint64_t val);
 void amdvi_mmio_reg_write(AMDVIState *s, unsigned size, uint64_t val, hwaddr addr);
+
+#endif /* HW_I386_AMD_IOMMU_COMMON_H */
