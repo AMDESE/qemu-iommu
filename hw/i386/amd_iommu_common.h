@@ -149,6 +149,21 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_FEATURE_HE                  (1ULL << 8) /* hardware error regs */
 #define AMDVI_FEATURE_PC                  (1ULL << 9) /* Perf counters       */
 
+#define AMDVI_FEATURE_GIO                 (1ULL << 48)
+#define AMDVI_FEATURE_EPHSUP              (1ULL << 50)
+
+#define AMDVI_FEATURE_GATS_SHIFT     12
+#define AMDVI_FEATURE_GATS_MASK      0x03ULL
+#define AMDVI_FEATURE_GATS_5LEVEL    ((1ULL & AMDVI_FEATURE_GATS_MASK) << AMDVI_FEATURE_GATS_SHIFT)
+
+#define AMDVI_FEATURE_GLX_SHIFT      14
+#define AMDVI_FEATURE_GLX_MASK       0x03ULL
+#define AMDVI_FEATURE_GLX_2LEVEL     ((1ULL & AMDVI_FEATURE_GLX_MASK) << AMDVI_FEATURE_GLX_SHIFT)
+
+#define AMDVI_FEATURE_PASMAX_SHIFT   32
+#define AMDVI_FEATURE_PASMAX_MASK    0x1FULL
+#define AMDVI_FEATURE_PASMAX_16      ((0xFULL & AMDVI_FEATURE_PASMAX_MASK) << AMDVI_FEATURE_PASMAX_SHIFT)
+
 #define DEFINE_AMD_IOMMU_SET_QUAD(prefix, IOMMUTYPE) \
 static void glue(prefix, _set_quad)(IOMMUTYPE *s, hwaddr addr, uint64_t val,  \
                                     uint64_t romask, uint64_t w1cmask)        \
