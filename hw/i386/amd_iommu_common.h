@@ -62,6 +62,7 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_MMIO_EXCL_LIMIT         0x0028
 #define AMDVI_MMIO_EXT_FEATURES       0x0030
 #define AMDVI_MMIO_XT_GEN_INTR        0x0170
+#define AMDVI_MMIO_XT_PPR_INT         0x0178
 #define AMDVI_MMIO_COMMAND_HEAD       0x2000
 #define AMDVI_MMIO_COMMAND_TAIL       0x2008
 #define AMDVI_MMIO_EVENT_HEAD         0x2010
@@ -239,6 +240,7 @@ const char *amdvi_mmio_get_name(hwaddr addr)
     MMIO_REG_TO_STRING(AMDVI_MMIO_PPR_HEAD);
     MMIO_REG_TO_STRING(AMDVI_MMIO_PPR_TAIL);
     MMIO_REG_TO_STRING(AMDVI_MMIO_XT_GEN_INTR);
+    MMIO_REG_TO_STRING(AMDVI_MMIO_XT_PPR_INT);
 #undef MMIO_REG_TO_STRING
     default:
         return "UNHANDLED";
