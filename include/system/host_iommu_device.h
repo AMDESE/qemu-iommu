@@ -20,6 +20,8 @@
 typedef union VendorCaps {
     struct iommu_hw_info_vtd vtd;
     struct iommu_hw_info_arm_smmuv3 smmuv3;
+    /* TODO: Move this change after linux header update */
+    struct iommu_hw_info_amd amd;
 } VendorCaps;
 
 /**
