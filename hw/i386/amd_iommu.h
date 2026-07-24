@@ -383,8 +383,8 @@ struct AMDVIState {
 
     /* root bus to register IOMMU ops */
     PCIBus *root_bus;
-};
 
-uint64_t amdvi_extended_feature_register(AMDVIState *s);
+    uint64_t (*get_extended_feature_register)(AMDVIState *s);
+};
 
 #endif
