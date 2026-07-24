@@ -214,6 +214,8 @@ int kvm_check_extension(KVMState *s, unsigned int extension);
 
 int kvm_vm_ioctl(KVMState *s, unsigned long type, ...);
 
+int kvm_vmfd(KVMState *s);
+
 void kvm_flush_coalesced_mmio_buffer(void);
 
 void kvm_irqchip_add_change_notifier(Notifier *n);

@@ -79,6 +79,11 @@ void kvm_irqchip_change_notify(void)
 {
 }
 
+int kvm_vmfd(KVMState *s)
+{
+    return -1;
+}
+
 void kvm_vmfd_add_change_notifier(NotifierWithReturn *n)
 {
 }
