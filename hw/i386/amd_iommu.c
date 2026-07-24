@@ -133,7 +133,7 @@ FIELD(AMDVI_IRTE_GA_LO, DESTINATION, 8, 24)
 FIELD(AMDVI_IRTE_GA_HI, VECTOR, 0, 8)
 FIELD(AMDVI_IRTE_GA_HI, DESTINATION_HI, 56, 8)
 
-uint64_t amdvi_extended_feature_register(AMDVIState *s)
+static uint64_t amdvi_extended_feature_register(AMDVIState *s)
 {
     uint64_t feature = AMDVI_DEFAULT_EXT_FEATURES;
     if (s->xtsup) {
@@ -2562,6 +2562,7 @@ static void amdvi_init(AMDVIState *s)
                    amdvi_extended_feature_register(s),
                    0xffffffffffffffef, 0);
     amdvi_set_quad(s, AMDVI_MMIO_STATUS, 0, 0x98, 0x67);
+    s->get_extended_feature_register = amdvi_extended_feature_register;
 }
 
 static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)

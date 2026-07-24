@@ -1916,9 +1916,10 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         AmdIvhdHdr11 ivhd11 = {};
 
         assert(s->root_bus);
+        assert(s->get_extended_feature_register);
         add_ivhd_entries_from_bus(s->root_bus, ivhd_blob);
 
-        extended_feature = amdvi_extended_feature_register(s);
+        extended_feature = s->get_extended_feature_register(s);
 
         if (!ivhd_blob->len) {
             /*
