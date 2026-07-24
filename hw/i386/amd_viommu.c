@@ -13,6 +13,7 @@
 #include "system/runstate.h"
 #include "hw/vfio/vfio-device.h"
 #include "hw/vfio/vfio-iommufd.h"
+#include "system/kvm.h"
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
@@ -31,6 +32,70 @@ DEFINE_AMD_VIOMMU_WRITE(l, uint32_t, ldl_le_p, stl_le_p)
 DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
 
 DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
+
+static void amd_viommu_intcapxt_decode(uint64_t val, uint32_t *vcpu_id,
+                                       uint8_t *vector)
+{
+    uint32_t dest_lo = (val >> 8) & 0xffffff;
+    uint32_t dest_hi = (val >> 56) & 0xff;
+
+    *vcpu_id = (dest_hi << 24) | dest_lo;
+    *vector = (val >> 32) & 0xff;
+}
+
+static int amd_viommu_ext_int_remap(AMDVIOMMUState *s, uint32_t type,
+                                    uint64_t val)
+{
+    uint32_t vcpu_id;
+    uint8_t vector;
+    int kvmfd;
+    int ret = 0;
+    Error *local_err = NULL;
+
+    if (!val) {
+        return 0;
+    }
+
+    if (!s->iommufd_state.viommu_id) {
+        error_report("%s: Unitialized vIOMMU", __func__);
+        exit(EXIT_FAILURE);
+    }
+
+    amd_viommu_intcapxt_decode(val, &vcpu_id, &vector);
+
+    kvmfd = kvm_vmfd(kvm_state);
+    if (kvmfd < 0) {
+        error_report("XT registers requires valid KVM VM fd");
+        return -EINVAL;
+    }
+
+    if (!iommufd_viommu_ext_int_remap(s->iommufd_state.iommufd,
+                                      s->iommufd_state.viommu_id, type,
+                                      kvmfd, vcpu_id, vector, &local_err)) {
+        error_reportf_err(local_err, "Failed to remap extended interrupt: ");
+        ret = -EINVAL;
+    }
+
+    trace_amd_viommu_ext_int_remap(type, vcpu_id, vector, ret);
+
+    return ret;
+}
+
+static inline void amd_viommu_handle_xt_event_int_write(AMDVIOMMUState *s)
+{
+    uint64_t val = amd_viommu_readq(s, AMDVI_MMIO_XT_GEN_INTR);
+
+    trace_amd_viommu_xt_int_write("AMDVI_MMIO_XT_GEN_INTR", val);
+    amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_EVENT, val);
+}
+
+static inline void amd_viommu_handle_xt_ppr_int_write(AMDVIOMMUState *s)
+{
+    uint64_t val = amd_viommu_readq(s, AMDVI_MMIO_XT_PPR_INT);
+
+    trace_amd_viommu_xt_int_write("AMDVI_MMIO_XT_PPR_INT", val);
+    amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_PPR, val);
+}
 
 static uint32_t amd_viommu_get_cmdbuf_flag(AMDVIOMMUState *s)
 {
@@ -281,6 +346,16 @@ static void amd_viommu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
          */
         if (offset || (size == 8)) {
             amd_viommu_handle_control_write(s);
+        }
+        break;
+    case AMDVI_MMIO_XT_GEN_INTR:
+        if (!offset && size == 8) {
+            amd_viommu_handle_xt_event_int_write(s);
+        }
+        break;
+    case AMDVI_MMIO_XT_PPR_INT:
+        if (!offset && size == 8) {
+            amd_viommu_handle_xt_ppr_int_write(s);
         }
         break;
     }
