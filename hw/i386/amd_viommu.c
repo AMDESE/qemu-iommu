@@ -15,6 +15,25 @@
 #include "amd_viommu.h"
 #include "trace.h"
 
+static uint64_t amd_viommu_extended_feature_register(X86IOMMUState *x86_iommu)
+{
+    AMDVIOMMUState *s = AMD_VIOMMU_DEVICE(x86_iommu);
+    return s->hwinfo->efr & AMD_VIOMMU_SUPPORTED_EFR;
+}
+
+static void amd_viommu_set_efrs_hwinfo(AMDVIOMMUState *s,
+                                       struct iommu_hw_info_amd *hwinfo)
+{
+    uint64_t efr;
+
+    s->hwinfo = hwinfo;
+    efr = amd_viommu_extended_feature_register(&s->iommu);
+    amd_viommu_set_quad(s, AMDVI_MMIO_EXT_FEATURES, efr,
+                        0xffffffffffffffff, 0);
+
+    trace_amd_viommu_efr(hwinfo->efr, efr);
+}
+
 static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
                                           int devfn)
 {
@@ -140,6 +159,10 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
         return false;
     }
 
+    if (!s->hwinfo) {
+        amd_viommu_set_efrs_hwinfo(s, &hiod->caps.vendor_caps.amd);
+    }
+
     new_key = g_malloc(sizeof(AMDDeviceKey));
     new_key->bus = bus;
     new_key->devfn = devfn;
@@ -186,6 +209,8 @@ static void amd_viommu_init(AMDVIOMMUState *s)
                                                 amd_iommu_device_key_fn,
                                                 amd_iommu_device_key_equal,
                                                 g_free, g_free);
+    s->hwinfo = NULL;
+    s->ivrs_info.get_extended_feature_register = amd_viommu_extended_feature_register;
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)

@@ -29,9 +29,18 @@ struct AMDVIOMMUState {
     AMDIVRSInfo ivrs_info;
 
     char *phys_iommu_path;
+
+    struct iommu_hw_info_amd *hwinfo; /* HWinfo provided by device */
 };
 
 typedef struct AMDIOMMUFDDevice {
     AMDVIOMMUState *viommu;
     HostIOMMUDevice *hiod;
 } AMDIOMMUFDDevice;
+
+ #define AMD_VIOMMU_SUPPORTED_EFR \
+                        (AMDVI_FEATURE_PPR | AMDVI_FEATURE_XT | \
+                         AMDVI_FEATURE_GT | AMDVI_FEATURE_GA | \
+                         AMDVI_FEATURE_GIO | AMDVI_FEATURE_EPHSUP | \
+                         AMDVI_FEATURE_GATS_5LEVEL | AMDVI_FEATURE_GLX_2LEVEL | \
+                         AMDVI_FEATURE_PASMAX_16)
