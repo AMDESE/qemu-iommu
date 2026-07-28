@@ -1267,3 +1267,5 @@ __attribute__((unused)) static void amd_viommu_pci_register_types(void)
     type_register_static(&amd_viommu_pci);
     type_register_static(&amd_viommu);
 }
+
+type_init(amd_viommu_pci_register_types);
