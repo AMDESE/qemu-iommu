@@ -2794,16 +2794,12 @@ int pci_qdev_find_device(const char *id, PCIDevice **pdev)
 int pci_qdev_find_device_by_pciid(int domid, int busno, int32_t devfn, PCIDevice **pdev)
 {
     PCIHostState *host_bridge;
-    int n = 0;
 
     QLIST_FOREACH(host_bridge, &pci_host_bridges, next) {
-        if (n == domid) {
-            *pdev = pci_find_device(host_bridge->bus, busno, devfn);
-            if (*pdev) {
-                return 0;
-            }
+        *pdev = pci_find_device(host_bridge->bus, busno, devfn);
+        if (*pdev) {
+            return 0;
         }
-        ++n;
     }
 
     return -ENODEV;
