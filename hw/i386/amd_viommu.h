@@ -17,7 +17,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(AMDVIOMMUState, AMD_VIOMMU_DEVICE)
 
 typedef struct AMDIOMMUFDState {
     IOMMUFDBackend *iommufd;                /* IOMMUFD backend object       */
+    uint32_t viommu_id;                     /* virtual IOMMU ID             */
     GHashTable *iommufd_dev_hash;           /* IOMMUFD device list          */
+    uint32_t parent_hwpt_id;                /* HWPT ID of the parent domain */
+    uint32_t devid;                         /* IOMMUFD device ID            */
 } AMDIOMMUFDState;
 
 struct AMDVIOMMUState {

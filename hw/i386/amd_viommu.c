@@ -10,10 +10,59 @@
 #include "hw/pci/pci_bridge.h"
 #include "hw/vfio/pci.h"
 #include "hw/core/iommu.h"
+#include "system/runstate.h"
 
 #include "amd_iommu_common.h"
 #include "amd_viommu.h"
 #include "trace.h"
+
+static bool amd_viommu_init_iommufd(AMDIOMMUFDState *s)
+{
+    Error *local_err = NULL;
+
+    if (!iommufd_backend_alloc_viommu(s->iommufd, s->devid,
+                                      IOMMU_VIOMMU_TYPE_AMD,
+                                      s->parent_hwpt_id,
+                                      &s->iommufd_viommu_amd,
+                                      sizeof(s->iommufd_viommu_amd),
+                                      &s->viommu_id, &local_err)) {
+        error_reportf_err(local_err,
+                          "Failed to allocate a amd-viommu iommufd type: ");
+        return false;
+    }
+
+    trace_amd_viommu_init_iommufd(s->viommu_id, s->devid, s->parent_hwpt_id);
+
+    return true;
+}
+
+static void amd_viommu_state_change_running(AMDVIOMMUState *s)
+{
+    if (s->iommufd_state.viommu_id)
+        return;
+
+    if (!amd_viommu_init_iommufd(&s->iommufd_state)) {
+        exit(EXIT_FAILURE);
+    }
+
+    return;
+}
+
+static void amd_viommu_vm_state_change(void *opaque,
+                                        bool running, RunState state)
+{
+    AMDVIOMMUState *s = opaque;
+
+    trace_amd_viommu_vm_state_change(RunState_str(state));
+
+    switch (state) {
+    case RUN_STATE_RUNNING:
+        amd_viommu_state_change_running(s);
+        break;
+    default:
+        break;
+    }
+}
 
 static uint64_t amd_viommu_extended_feature_register(X86IOMMUState *x86_iommu)
 {
@@ -163,6 +212,18 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
         amd_viommu_set_efrs_hwinfo(s, &hiod->caps.vendor_caps.amd);
     }
 
+    if (!iommufd_state->parent_hwpt_id) {
+        iommufd_state->parent_hwpt_id = vdev->hwpt->hwpt_id;
+    } else if (iommufd_state->parent_hwpt_id != vdev->hwpt->hwpt_id) {
+        error_setg(errp, "device %s HWPT ID does not match previous HWPT ID",
+                   vdev->name);
+        return false;
+    }
+
+    if (!s->iommufd_state.devid) {
+        s->iommufd_state.devid = HOST_IOMMU_DEVICE_IOMMUFD(hiod)->devid;
+    }
+
     new_key = g_malloc(sizeof(AMDDeviceKey));
     new_key->bus = bus;
     new_key->devfn = devfn;
@@ -211,6 +272,11 @@ static void amd_viommu_init(AMDVIOMMUState *s)
                                                 g_free, g_free);
     s->hwinfo = NULL;
     s->ivrs_info.get_extended_feature_register = amd_viommu_extended_feature_register;
+
+    s->iommufd_state.devid = 0;
+    s->iommufd_state.viommu_id = 0;
+    s->iommufd_state.parent_hwpt_id = 0;
+    qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
