@@ -16,6 +16,49 @@
 #include "amd_viommu.h"
 #include "trace.h"
 
+static bool amd_viommu_init_accel_mmio(AMDVIOMMUState *s)
+{
+    AMDIOMMUFDState *iommufd_state = &s->iommufd_state;
+    X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
+    uint64_t vf_base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index) +
+                            AMD_VIOMMU_VF_MMIO_BASE;
+    off_t mmap_offset =
+        iommufd_state->iommufd_viommu_amd.out_vfmmio_mmap_offset;
+    Error *local_err = NULL;
+    char *name;
+
+    if (!iommufd_backend_viommu_mmap(iommufd_state->iommufd,
+                                     iommufd_state->viommu_id,
+                                     AMDVI_PAGE_SIZE, mmap_offset,
+                                     &s->vf_mmio_page, &local_err)) {
+        error_reportf_err(local_err, "Failed to mmap VF MMIO: ");
+        s->vf_mmio_page = NULL;
+        return false;
+    }
+
+    name = g_strdup_printf("vf-mmio");
+    memory_region_init_ram_device_ptr(&s->mr_vf_mmio, OBJECT(s), name,
+                                      AMD_VIOMMU_VF_MMIO_SIZE,
+                                      s->vf_mmio_page);
+    /*
+     * This is a vf-mmio region that is not used for DMA.
+     * It is needs to be mapped as RAM in order to allow CPU nested pagetable
+     * to map for the vf-mmio region.
+     */
+    memory_region_set_skip_iommu_map(&s->mr_vf_mmio, true);
+
+    memory_region_add_subregion_overlap(get_system_memory(),
+                                        vf_base_addr,
+                                        &s->mr_vf_mmio,
+                                        1);
+
+    trace_amd_viommu_vf_mmio_map(vf_base_addr, AMD_VIOMMU_VF_MMIO_SIZE,
+                                 mmap_offset);
+
+    g_free(name);
+    return true;
+}
+
 static bool amd_viommu_init_iommufd(AMDIOMMUFDState *s)
 {
     Error *local_err = NULL;
@@ -42,6 +85,10 @@ static void amd_viommu_state_change_running(AMDVIOMMUState *s)
         return;
 
     if (!amd_viommu_init_iommufd(&s->iommufd_state)) {
+        exit(EXIT_FAILURE);
+    }
+
+    if (!amd_viommu_init_accel_mmio(s)) {
         exit(EXIT_FAILURE);
     }
 
@@ -277,6 +324,8 @@ static void amd_viommu_init(AMDVIOMMUState *s)
     s->iommufd_state.viommu_id = 0;
     s->iommufd_state.parent_hwpt_id = 0;
     qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
+
+    s->vf_mmio_page = NULL;
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
