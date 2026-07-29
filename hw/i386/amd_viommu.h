@@ -34,8 +34,10 @@ struct AMDVIOMMUState {
 
     char *phys_iommu_path;
 
-    struct iommu_hw_info_amd *hwinfo; /* HWinfo provided by device */
+    struct iommu_hw_info_amd *hwinfo;
 
+    MemoryRegion mr_vf_mmio;            /* Accelerated MMIO memory region */
+    void *vf_mmio_page;
     uint8_t mmior[AMDVI_MMIO_SIZE];    /* read/write MMIO              */
     uint8_t w1cmask[AMDVI_MMIO_SIZE];  /* read/write 1 clear mask      */
     uint8_t romask[AMDVI_MMIO_SIZE];   /* MMIO read/only mask          */
@@ -46,9 +48,12 @@ typedef struct AMDIOMMUFDDevice {
     HostIOMMUDevice *hiod;
 } AMDIOMMUFDDevice;
 
- #define AMD_VIOMMU_SUPPORTED_EFR \
+#define AMD_VIOMMU_SUPPORTED_EFR \
                         (AMDVI_FEATURE_PPR | AMDVI_FEATURE_XT | \
                          AMDVI_FEATURE_GT | AMDVI_FEATURE_GA | \
                          AMDVI_FEATURE_GIO | AMDVI_FEATURE_EPHSUP | \
                          AMDVI_FEATURE_GATS_5LEVEL | AMDVI_FEATURE_GLX_2LEVEL | \
                          AMDVI_FEATURE_PASMAX_16)
+
+#define AMD_VIOMMU_VF_MMIO_BASE     (0x2000)
+#define AMD_VIOMMU_VF_MMIO_SIZE     (0x1000)
