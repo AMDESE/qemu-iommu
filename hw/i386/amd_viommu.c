@@ -162,9 +162,6 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
     }
 
     s->enabled = true;
-
-    /* Allocate a passthrough domain */
-    amdvi_alloc_passthrough_hwpt(amd_idev, s);
     return 0;
 }
 
@@ -192,19 +189,27 @@ static int amd_viommu_setup_nest_parent(AMDIOMMUFDDevice *dev)
  */
 static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
 {
-    if (amd_viommu_setup_nest_parent(amd_idev))
+    if (amd_viommu_setup_nest_parent(amd_idev)) {
         return;
+    }
 
-    if (!s->enabled && amdvi_viommu_initialized_one(s, amd_idev))
+    /*
+     * The iommufd vIOMMU object and its VF MMIO page are per-vIOMMU and are
+     * shared by every attached device, whereas the passthrough domain is
+     * per-device.  This runs once per device, and again for every device when
+     * restoring, so each step carries its own guard.
+     */
+    if (!s->enabled && amdvi_viommu_initialized_one(s, amd_idev)) {
         return;
+    }
 
-    if (amd_viommu_mmap_vf_mmio(s))
-        goto out_hwpt;
+    if (amd_viommu_mmap_vf_mmio(s)) {
+        return;
+    }
 
-    return;
-
-out_hwpt:
-    return;
+    if (!amd_idev->passthrough_hwpt_id) {
+        amdvi_alloc_passthrough_hwpt(amd_idev, s);
+    }
 }
 
 static void vdev_alloc_all(AMDVIState *s) {
