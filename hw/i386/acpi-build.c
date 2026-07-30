@@ -74,6 +74,7 @@
 
 #include "qom/qom-qobject.h"
 #include "hw/i386/amd_iommu.h"
+#include "hw/i386/amd_viommu.h"
 #include "hw/i386/intel_iommu.h"
 #include "hw/virtio/virtio-iommu.h"
 
@@ -1884,6 +1885,9 @@ static AMDIVRSInfo *amd_iommu_get_ivrs_info(X86IOMMUState *x86_iommu)
         if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
             AMDVIState *amdvi_s = AMD_IOMMU_DEVICE(x86_iommu);
             return &amdvi_s->ivrs_info;
+        } else if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
+            AMDVIOMMUState *amd_viommu_s = AMD_VIOMMU_DEVICE(x86_iommu);
+            return &amd_viommu_s->ivrs_info;
         }
         return NULL;
 }
@@ -2175,7 +2179,8 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
 
     x86_iommu = QLIST_FIRST(x86_iommus);
     iommu = DEVICE(&x86_iommu->busdev);
-    if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
+    if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE) ||
+        object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
         acpi_add_table(table_offsets, tables_blob);
         build_amd_iommu(tables_blob, tables->linker, x86ms->oem_id,
                         x86ms->oem_table_id);
