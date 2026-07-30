@@ -1878,6 +1878,16 @@ get_amd_ivhd_feature_report(uint64_t feature)
     return feature_report;
 }
 
+static AMDIVRSInfo *amd_iommu_get_ivrs_info(X86IOMMUState *x86_iommu)
+{
+        DeviceState *iommu = DEVICE(&x86_iommu->busdev);
+        if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE)) {
+            AMDVIState *amdvi_s = AMD_IOMMU_DEVICE(x86_iommu);
+            return &amdvi_s->ivrs_info;
+        }
+        return NULL;
+}
+
 static void
 build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                 const char *oem_table_id)
@@ -1906,20 +1916,26 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
      * is sufficient when no aliases are present.
      */
     QLIST_FOREACH(x86_iommu, x86_iommu_list, next) {
-        AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
+        AMDIVRSInfo *ivrs_info = amd_iommu_get_ivrs_info(x86_iommu);
         GArray *ivhd_blob = g_array_new(false, true, 1);
-        PCIDevice *iommu_dev = &(s->pci->dev);
-        int iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
-        uint16_t iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
+        PCIDevice *iommu_dev;
+        int iommu_bus;
+        uint16_t iommu_devid;
         uint64_t extended_feature;
         AmdIvhdHdr10 ivhd10 = {};
         AmdIvhdHdr11 ivhd11 = {};
 
-        assert(s->root_bus);
-        assert(s->get_extended_feature_register);
-        add_ivhd_entries_from_bus(s->root_bus, ivhd_blob);
+        assert(ivrs_info);
+        assert(ivrs_info->pci);
+        assert(ivrs_info->root_bus);
+        assert(ivrs_info->get_extended_feature_register);
 
-        extended_feature = s->get_extended_feature_register(s);
+        add_ivhd_entries_from_bus(ivrs_info->root_bus, ivhd_blob);
+
+        iommu_dev = &(ivrs_info->pci->dev);
+        iommu_bus = pci_bus_num(pci_get_bus(iommu_dev));
+        iommu_devid = PCI_BUILD_BDF(iommu_bus, iommu_dev->devfn);
+        extended_feature = ivrs_info->get_extended_feature_register(x86_iommu);
 
         if (!ivhd_blob->len) {
             /*
@@ -1954,8 +1970,8 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
                        AMD_IVHD_FLAG_PREF_SUP  | AMD_IVHD_FLAG_PPR_SUP;
         ivhd10.length = ivhd_blob->len + sizeof(ivhd10);
         ivhd10.devid = iommu_devid;
-        ivhd10.capab_offset = s->pci->capab_offset;
-        ivhd10.base_addr = s->mr_mmio.addr;
+        ivhd10.capab_offset = ivrs_info->pci->capab_offset;
+        ivhd10.base_addr = ivrs_info->base_addr;
         ivhd10.iommu_feature_report = get_amd_ivhd_feature_report(extended_feature);
         g_array_append_vals(table_data, &ivhd10, sizeof(ivhd10));
         /* IVHD entries as found above */
@@ -1965,9 +1981,9 @@ build_amd_iommu(GArray *table_data, BIOSLinker *linker, const char *oem_id,
         ivhd11.flags = AMD_IVHD_FLAG_HT_TUN_EN | AMD_IVHD_FLAG_IOTLB_SUP;
         ivhd11.length = ivhd_blob->len + sizeof(ivhd11);
         ivhd11.devid = iommu_devid;
-        ivhd11.capab_offset = s->pci->capab_offset;
-        ivhd11.base_addr = s->mr_mmio.addr;
-        ivhd11.iommu_attributes = !s->iommu.dma_translation <<
+        ivhd11.capab_offset = ivrs_info->pci->capab_offset;
+        ivhd11.base_addr = ivrs_info->base_addr;
+        ivhd11.iommu_attributes = !x86_iommu->dma_translation <<
                                   AMD_IVHD_ATTRIBUTES_HATDIS_SHIFT;
         ivhd11.efr = extended_feature;
         g_array_append_vals(table_data, &ivhd11, sizeof(ivhd11));

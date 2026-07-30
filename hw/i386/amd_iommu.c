@@ -133,8 +133,9 @@ FIELD(AMDVI_IRTE_GA_LO, DESTINATION, 8, 24)
 FIELD(AMDVI_IRTE_GA_HI, VECTOR, 0, 8)
 FIELD(AMDVI_IRTE_GA_HI, DESTINATION_HI, 56, 8)
 
-static uint64_t amdvi_extended_feature_register(AMDVIState *s)
+static uint64_t amdvi_extended_feature_register(X86IOMMUState *x86_iommu)
 {
+    AMDVIState *s = AMD_IOMMU_DEVICE(x86_iommu);
     uint64_t feature = AMDVI_DEFAULT_EXT_FEATURES;
     if (s->xtsup) {
         feature |= AMDVI_FEATURE_XT;
@@ -2559,10 +2560,10 @@ static void amdvi_init(AMDVIState *s)
     /* reset MMIO */
     memset(s->mmior, 0, AMDVI_MMIO_SIZE);
     amdvi_set_quad(s, AMDVI_MMIO_EXT_FEATURES,
-                   amdvi_extended_feature_register(s),
+                   amdvi_extended_feature_register(&s->iommu),
                    0xffffffffffffffef, 0);
     amdvi_set_quad(s, AMDVI_MMIO_STATUS, 0, 0x98, 0x67);
-    s->get_extended_feature_register = amdvi_extended_feature_register;
+    s->ivrs_info.get_extended_feature_register = amdvi_extended_feature_register;
 }
 
 static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
@@ -2759,6 +2760,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    s->ivrs_info.pci = s->pci;
     base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index);
 
     /* Set up PCI Capability base address */
@@ -2767,7 +2769,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
     pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_HIGH,
                 base_addr >> 32);
 
-    s->root_bus = get_root_bus(iommu_bus);
+    s->ivrs_info.root_bus = get_root_bus(iommu_bus);
 
     s->iotlb = g_hash_table_new_full(amdvi_iotlb_hash,
                                      amdvi_iotlb_equal, g_free, g_free);
@@ -2780,6 +2782,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
                           "amdvi-mmio", AMDVI_MMIO_SIZE);
     memory_region_add_subregion(get_system_memory(), base_addr,
                                 &s->mr_mmio);
+    s->ivrs_info.base_addr = base_addr;
 
     /* Create the share memory regions by all devices */
     memory_region_init(&s->mr_sys, OBJECT(s), "amdvi-sys", UINT64_MAX);
@@ -2822,7 +2825,7 @@ static void amdvi_sysbus_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    pci_setup_iommu(s->root_bus, &amdvi_iommu_ops, s);
+    pci_setup_iommu(s->ivrs_info.root_bus, &amdvi_iommu_ops, s);
     amdvi_init(s);
 }
 

@@ -314,6 +314,13 @@ struct AMDVIPCIState {
     uint32_t capab_offset;       /* capability offset pointer    */
 };
 
+typedef struct AMDIVRSInfo {
+    AMDVIPCIState *pci;         /* IOMMU PCI device             */
+    PCIBus *root_bus;           /* root bus to register IOMMU ops */
+    uint64_t base_addr;      /* MMIO region                  */
+    uint64_t (*get_extended_feature_register)(X86IOMMUState *s);
+} AMDIVRSInfo;
+
 struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
     AMDVIPCIState *pci;         /* IOMMU PCI device             */
@@ -381,10 +388,7 @@ struct AMDVIState {
     /* DMA address translation */
     bool dma_remap;
 
-    /* root bus to register IOMMU ops */
-    PCIBus *root_bus;
-
-    uint64_t (*get_extended_feature_register)(AMDVIState *s);
+   AMDIVRSInfo ivrs_info;
 };
 
 #endif
