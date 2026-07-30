@@ -99,21 +99,7 @@ static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
     if (object_dynamic_cast(OBJECT(b->parent_dev), TYPE_PCI_BRIDGE))
         rid += 0x100;
 
-    fprintf(stderr, "DEBUG: %s: --- bus=%#x, bus_parent_dev=%s, device name=%s, rid=%#x\n", __func__,
-            pci_bus_num(b), b->parent_dev->name, d->name, rid);
-
     rid = PCI_BUILD_BDF(pci_bus_num(b), d->devfn);
-    /*
-    static int position = 1;
-    if (position == 1) {
-        rid = 0x2200;
-	position++;
-    } else {
-        rid = 0x7200;
-    }
-    */
-    fprintf(stderr, "DEBUG AGAIN: %s: --- bus=%#x, bus_parent_dev=%s, device name=%s, rid=%#x\n", __func__,
-            pci_bus_num(b), b->parent_dev->name, d->name, rid);
 
     amd_idev->core = iommufd_backend_alloc_vdev(idev, amd_idev->iommu_state->core, rid);
     if (!amd_idev->core) {
@@ -123,11 +109,6 @@ static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
 
 static void *amdvi_walk_bus_setup(PCIBus *b, void *opaque)
 {
-    uint16_t rid = pci_requester_id(b->parent_dev);
-
-    fprintf(stderr, "DEBUG: %s: bus_name=%s, bus=%#x, bus_parent_dev=%s, rid=%#x\n", __func__,
-    b->qbus.name, pci_bus_num(b), b->parent_dev->name, rid);
-
     pci_for_each_device_under_bus(b, amdvi_alloc_vdev, opaque);
     return opaque;
 }
@@ -171,7 +152,6 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
     }
 
     s->enabled = true;
-    fprintf(stderr, "DEBUG: %s: iommufd vIOMMU initialized.\n", __func__);
 
     /* Allocate a passthrough domain */
     amdvi_alloc_passthrough_hwpt(amd_idev, s);
@@ -202,8 +182,6 @@ static int amd_viommu_setup_nest_parent(AMDIOMMUFDDevice *dev)
  */
 static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev)
 {
-    fprintf(stderr, "DEBUG: %s\n", __func__);
-
     if (amd_viommu_setup_nest_parent(amd_idev))
         return;
 
@@ -213,9 +191,6 @@ static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev
     if (amd_viommu_mmap_vf_mmio(s))
         goto out_hwpt;
 
-    // Sairaj: Moved vdevice setup from here
-
-    fprintf(stderr, "DEBUG: %s: returning\n", __func__);
     return;
 
 out_hwpt:
@@ -343,8 +318,6 @@ static void amd_viommu_vm_state_change(void *opaque,
 {
     AMDVIState *s = opaque;
 
-    fprintf(stderr, "DEBUG: %s: state=%u\n", __func__, state);
-
     switch (state) {
     case RUN_STATE_RUNNING:
         amd_viommu_state_change_running(s);
@@ -464,25 +437,11 @@ static AMDIOMMUFDDevice *amd_viommu_get_device_from_bdf(AMDVIState *s, uint16_t 
 
     g_hash_table_iter_init(&as_it, s->amd_iommufd_dev_hash);
 
-fprintf(stderr, "DEBUG0: %s: bus=%#x, devfn=%#x\n", __func__, bus, devfn);
-
     while (g_hash_table_iter_next(&as_it, (void **)&key, (void **)&amd_idev)) {
-fprintf(stderr, "DEBUG1: %s: iter bus=%#x, devfn=%#x\n", __func__, pci_bus_num(key->bus), key->devfn);
         if (pci_bus_num(key->bus) == bus && key->devfn == devfn)
             return amd_idev;
     }
     return NULL;
-}
-
-static uint64_t get_gcr3_trp(uint64_t *dte)
-{
-    uint64_t tmp1, tmp2, tmp3;
-
-    tmp1 = (dte[0] >> 58) & 0x7ULL;
-    tmp2 = (dte[1] >> 16) & 0xFFFFULL;
-    tmp3 = (dte[1] >> 43) & 0x3FFFFFULL;
-
-    return (tmp1 << 12) | (tmp2 << 15) | (tmp3 << 31);
 }
 
 static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
@@ -498,9 +457,6 @@ static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
     hwpt.dte[1] = dte[1];
     hwpt.dte[2] = dte[2];
     hwpt.dte[3] = dte[3];
-
-    fprintf(stderr, "DEBUG: %s: ALLOC , gdevid=%#x, dte=%016lx:%016lx:%016lx:%016lx\n",
-		__func__, dev_id, dte[0], dte[1], dte[2], dte[3]);
 
     /*
      * TODO:
@@ -524,9 +480,6 @@ static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
     old_hwpt = dev->v2_hwpt_id;
     dev->v2_hwpt_id = hwpt_id;
 
-    fprintf(stderr, "DEBUG: %s: ATTACH, idev.dev_id=%#x, hwpt_id=%#x:%#x\n",
-	    __func__, vdev->idev.dev_id, dev->v1_hwpt.hwpt_id, hwpt_id);
-
     ret = iommufd_device_attach_hwpt(&vdev->idev, hwpt_id);
 
     if (old_hwpt) {
@@ -542,7 +495,6 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
     AMDIOMMUFDDevice *dev;
     AMDVI_dte_info *dte_info;
     bool v = false;
-    uint64_t gcr3_trp;
     uint64_t dte[4];
     uint64_t offset0 = 0, offset1 = 0, offset2 = 0, offset3 = 0;
     uint32_t devid;
@@ -561,9 +513,6 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
      * from the devid from primary bus. See amd_viommu_handle_dev_tab_mmio_write().
      */
     devid = (pci_bus_num(s->root_bus) << 8) + (offset >> 5);
-
-//    fprintf(stderr, "DEBUG: %s: primary_bus=%#x, devid=%#x, offset=%#lx \n",
-//	__func__, pci_bus_num(s->primary_bus), devid, offset);
 
     if (devid > ((s->last_bus_nr << 8) | 0xFF)) {
         error_printf("%s: devid %#x is out of range (%#x)\n", __func__,
@@ -611,10 +560,6 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
     dte[3] = amd_viommu_dte_read(opaque, offset3, size);
 
     v = dte[0] & 0x1ULL;
-    gcr3_trp = get_gcr3_trp(dte);
-
-    fprintf(stderr, "DEBUG: %s: gdevid=%#04x, gcr3_trp=%016lx DTE[%lu] offset=%#05lx, dte=%016lx:%016lx:%016lx:%016lx\n",
-            __func__, devid, gcr3_trp, (offset % 0x20) >> 3, offset, dte[0], dte[1], dte[2], dte[3]);
 
     /*
      * Handle cases:
@@ -641,8 +586,6 @@ static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsi
          */
         dev = amd_viommu_get_device_from_bdf(s, devid >> 8, devid & 0xFF);
         if (!dev) {
-            fprintf(stderr, "DEBUG: %s: %u: Failed get_device_from_bdf (%#x)\n",
-                    __func__, __LINE__, devid);
             /* With newer multiple IOMMU support we publish buses in IVRS
              * This means that kernel will try to program DTE for qemu buses
              * We can safely ignore these DTE writes.
@@ -732,11 +675,6 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
         exit(-ENOMEM);
 
     memset(s->devtab, 0, s->devtab_len);
-
-    fprintf(stderr, "DEBUG: %s: %s, base=%#lx, offset=%#lx, bus=%#x, last_bus=%#x, len=%#lx size=%#lx, req_size=%#lx\n",
-            __func__, name, s->devtab_base, offset,
-            pci_bus_num(s->root_bus), s->last_bus_nr, s->devtab_len,
-            s->devtab_size, req_size);
 
     /*
      * Set up memory listener for IOMMU Device Table for DTEs within
@@ -894,7 +832,6 @@ static inline void amdvi_handle_xt_event_int_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_XT_EVENT_INT);
 
-    fprintf(stderr, "DEBUG: %s: val=%#lx\n", __func__, val);
     amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_EVENT, val);
 }
 
@@ -902,7 +839,6 @@ static inline void amdvi_handle_xt_ppr_int_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_XT_PPR_INT);
 
-    fprintf(stderr, "DEBUG: %s: val=%#lx\n", __func__, val);
     amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_PPR, val);
 }
 
@@ -1041,9 +977,6 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
                                    HostIOMMUDevice *hiod, Error **errp)
 {
     AMDVIState *s = opaque;
-    VFIODevice *vbasedev = hiod->agent;
-    VFIOPCIDevice *vdev = container_of(vbasedev, VFIOPCIDevice, vbasedev);
-    PCIDevice *pdev = &vdev->parent_obj;
     AMDIOMMUFDDevice *amd_idev;
     struct AMDVI_dte_key *new_key;
     struct AMDVI_dte_key key = {
@@ -1055,9 +988,6 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
 
     assert(hiod);
     assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
-
-    fprintf(stderr, "DEBUG: %s: bus=%s(%#x), devfn=%#x, pdev_name=%s\n", __func__,
-	    bus->qbus.name, pci_bus_num(bus), devfn, pdev->name);
 
     /* TODO: Replace this w/ amd_iommufd_dev_hash? */
     if (g_hash_table_lookup(s->hiod_hash, &key)) {
@@ -1088,9 +1018,6 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     s->iommufd = idev->iommufd;
     _build_efr_guest_translation(caps, (uint64_t*) &s->hwinfo.efr,
                                  (uint64_t*) &s->hwinfo.efr2);
-
-    fprintf(stderr, "DEBUG %s: hwinfo 0x%llx 0x%llx\n",
-            __func__, s->hwinfo.efr, s->hwinfo.efr2);
 
     return true;
 }
