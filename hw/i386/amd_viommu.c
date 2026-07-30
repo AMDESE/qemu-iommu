@@ -43,6 +43,16 @@ static int amd_viommu_mmap_vf_mmio(AMDVIState *s)
     X86IOMMUState *x86_iommu = X86_IOMMU_DEVICE(s);
     uint64_t baseaddr = AMDVI_BASE_ADDR + (x86_iommu->index * AMDVI_MMIO_SIZE);
 
+    /*
+     * There is one VF MMIO page per vIOMMU, but this is reached once per
+     * attached VFIO device from amd_viommu_state_change_running().  Mapping it
+     * again would leak the previous mapping and re-register &s->mr_vf_mmio,
+     * which is already a subregion of system memory.
+     */
+    if (s->vf_mmio_page) {
+        return 0;
+    }
+
     s->vf_mmio_page = mmap(NULL,
                          AMDVI_PAGE_SIZE,
                          PROT_READ | PROT_WRITE,
