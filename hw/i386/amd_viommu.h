@@ -32,6 +32,7 @@ typedef struct AMDIOMMUFDState {
     uint32_t parent_hwpt_id;                /* HWPT ID of the parent domain */
     uint32_t devid;                         /* IOMMUFD device ID            */
     bool enable_iommu;
+    uint32_t pt_nested_hwpt_id;             /* HWPT ID of Passthrough nested domain    */
 } AMDIOMMUFDState;
 
 struct AMDVIOMMUState {
@@ -67,6 +68,16 @@ typedef struct AMDIOMMUFDDevice {
     HostIOMMUDevice *hiod;
     uint32_t vdevice_id;
     MemoryRegion mr_dte;
+
+    struct dte_info {
+        union {
+            uint8_t dte8[AMDVI_MMIO_DEVTAB_ENTRY_SIZE];
+            uint64_t dte64[4];
+        };
+        int last_offset;
+    } dte_info;
+
+    uint32_t nested_hwpt_id;                /* HWPT ID of the Nested domain */
 } AMDIOMMUFDDevice;
 
 #define AMD_VIOMMU_SUPPORTED_EFR \
