@@ -141,6 +141,11 @@ amd_viommu_ext_int_remap(uint32_t type, uint32_t vcpu_id, uint8_t vector, int re
 amd_viommu_devtab_write(uint64_t base, uint64_t size) "devtab base 0x%"PRIx64" size 0x%"PRIx64
 amd_viommu_alloc_dte_as(uint8_t bus, uint8_t slot, uint8_t func, uint64_t offset) "dte region for devid: %02x:%02x.%x at 0x%"PRIx64
 amd_viommu_dealloc_dte_as(uint8_t bus, uint8_t slot, uint8_t func) "dte region for devid: %02x:%02x.%x"
+amd_viommu_dte_write(uint64_t offset, unsigned size, uint64_t dte0, uint64_t dte1, uint64_t dte2, uint64_t dte3) "dte write offset 0x%"PRIx64" size %u dte 0x%"PRIx64":0x%"PRIx64":0x%"PRIx64":0x%"PRIx64
+amd_viommu_invalid_dte(const char *reason) "invalid dte: %s"
+amd_viommu_update_gcr3(uint32_t dev_id, uint32_t nested_hwpt_id) "dev_id %u nested_hwpt_id %u"
+amd_viommu_attach_nested_hwpt(uint32_t dev_id, uint32_t old_hwpt_id, uint32_t new_hwpt_id, int ret) "dev_id %u old_hwpt_id %u new_hwpt_id %u ret %d"
+amd_viommu_reset_dev_hwpt(uint32_t dev_id, uint32_t pt_hwpt_id) "dev_id %u pt_hwpt_id %u"
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"

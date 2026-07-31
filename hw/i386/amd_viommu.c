@@ -33,10 +33,251 @@ DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
 
 DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
 
+static uint64_t amd_viommu_dte_read(void *opaque, hwaddr offset, unsigned size)
+{
+    uint64_t val = 0;
+    AMDIOMMUFDDevice *amd_idev = opaque;
+
+    if (size ==  2) {
+        val = lduw_le_p(&amd_idev->dte_info.dte8[offset]);
+    } else if (size == 4) {
+        val = ldl_le_p(&amd_idev->dte_info.dte8[offset]);
+    } else if (size == 8) {
+        val = ldq_le_p(&amd_idev->dte_info.dte8[offset]);
+    }
+
+    return val;
+}
+
+static int amd_viommu_device_attach_nested_hwpt(AMDIOMMUFDDevice *amd_idev,
+                                                uint32_t nested_hwpt_id)
+{
+    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+    uint32_t old_nested_hwpt_id = amd_idev->nested_hwpt_id;
+    uint32_t pt_nested_hwpt_id = amd_idev->viommu->iommufd_state.pt_nested_hwpt_id;
+    Error *local_err = NULL;
+    int ret = 0;
+
+    if (old_nested_hwpt_id == nested_hwpt_id) {
+        return ret;
+    }
+
+    if (!host_iommu_device_iommufd_attach_hwpt(idev, IOMMU_NO_PASID,
+                                               nested_hwpt_id, &local_err)) {
+        error_reportf_err(local_err, "Failed to attach nested HWPT: ");
+        ret = -EINVAL;
+    }
+
+    amd_idev->nested_hwpt_id = nested_hwpt_id;
+
+    trace_amd_viommu_attach_nested_hwpt(idev->devid, old_nested_hwpt_id,
+                                        nested_hwpt_id, ret);
+
+    if (!ret && old_nested_hwpt_id &&
+        old_nested_hwpt_id != pt_nested_hwpt_id) {
+        iommufd_backend_free_id(amd_idev->viommu->iommufd_state.iommufd,
+                                old_nested_hwpt_id);
+        return ret;
+    }
+
+    if (ret) {
+        if (old_nested_hwpt_id) {
+            host_iommu_device_iommufd_attach_hwpt(idev, IOMMU_NO_PASID,
+                                                  old_nested_hwpt_id, NULL);
+            amd_idev->nested_hwpt_id = old_nested_hwpt_id;
+        } else {
+            /* Attach to passthrough hwpt*/
+            host_iommu_device_iommufd_attach_hwpt(idev, IOMMU_NO_PASID,
+                                                  pt_nested_hwpt_id, NULL);
+            amd_idev->nested_hwpt_id = pt_nested_hwpt_id;
+        }
+    }
+
+    return ret;
+}
+
+static int amd_viommu_update_gcr3(AMDIOMMUFDDevice *amd_idev)
+{
+    int ret;
+    uint32_t nested_hwpt_id;
+    Error *local_err = NULL;
+    struct iommu_hwpt_amd_guest hwpt;
+    uint32_t dev_id = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod)->devid;
+    AMDVIOMMUState *viommu = amd_idev->viommu;
+
+    memcpy(&hwpt.dte, &amd_idev->dte_info.dte8, AMDVI_MMIO_DEVTAB_ENTRY_SIZE);
+
+    /* Calling drivers/iommu/amd/viommu.c: _amd_viommu_alloc_domain_nested() */
+    if (!iommufd_backend_alloc_hwpt(viommu->iommufd_state.iommufd, dev_id,
+                                    viommu->iommufd_state.viommu_id, 0,
+                                    IOMMU_HWPT_DATA_AMD_GUEST, sizeof(hwpt),
+                                    &hwpt, &nested_hwpt_id, &local_err)) {
+        error_report_err(local_err);
+        return -EINVAL;
+    }
+
+    ret = amd_viommu_device_attach_nested_hwpt(amd_idev, nested_hwpt_id);
+
+    if (ret) {
+        error_report("Could not attach device %d to nested HWPT %d", dev_id, nested_hwpt_id);
+        iommufd_backend_free_id(viommu->iommufd_state.iommufd, nested_hwpt_id);
+    }
+
+    trace_amd_viommu_update_gcr3(dev_id, nested_hwpt_id);
+
+    return ret;
+}
+
+static uint64_t get_gcr3_trp(uint64_t *dte)
+{
+    uint64_t gcr3_14_12, gcr3_30_15, gcr3_51_31;
+
+    gcr3_14_12 = (dte[0] & AMDVI_DEV_GCR3_14_12_MASK) >>
+                 AMDVI_DEV_GCR3_14_12_SHIFT;
+    gcr3_30_15 = (dte[1] & AMDVI_DEV_GCR3_30_15_MASK) >>
+                 AMDVI_DEV_GCR3_30_15_SHIFT;
+    gcr3_51_31 = (dte[1] & AMDVI_DEV_GCR3_51_31_MASK) >>
+                 AMDVI_DEV_GCR3_51_31_SHIFT;
+
+    return (gcr3_51_31 << 31) | (gcr3_30_15 << 15) | (gcr3_14_12 << 12);
+}
+
+static bool amd_viommu_validate_dte(uint64_t *dte)
+{
+    bool valid, transl_valid, guest_transl_valid;
+    uint8_t gpt_level, glx;
+    uint64_t gcr3_trp;
+
+    if ((dte[0] & AMDVI_DEV_QUAD0_RESERVED_MASK) ||
+        (dte[1] & AMDVI_DEV_QUAD1_RESERVED_MASK) ||
+        (dte[2] & AMDVI_DEV_QUAD2_RESERVED_MASK) ||
+        (dte[3] & AMDVI_DEV_QUAD3_RESERVED_MASK)) {
+        error_report("DTE reserve region set");
+        trace_amd_viommu_invalid_dte("reserved bits set");
+        return false;
+    }
+
+    valid              = dte[0] & AMDVI_DEV_VALID;
+    transl_valid       = dte[0] & AMDVI_DEV_TRANSLATION_VALID;
+    guest_transl_valid = dte[0] & AMDVI_DEV_G_TRANSLATION_VALID;
+
+    if (!(valid && transl_valid && guest_transl_valid)) {
+        /* Skip the translation */
+        trace_amd_viommu_invalid_dte("translation not enabled");
+        return false;
+    }
+
+    gcr3_trp = get_gcr3_trp(dte);
+
+    if (!gcr3_trp) {
+        error_report("Invalid GCR3 address");
+        trace_amd_viommu_invalid_dte("invalid gcr3 address");
+        return false;
+    }
+
+    gpt_level = (dte[2] & AMDVI_DEV_G_PAGING_MODE_MASK) >>
+                AMDVI_DEV_G_PAGING_MODE_SHIFT;
+
+    if (gpt_level != AMDVI_G_PGTABLE_4_LEVEL &&
+        gpt_level != AMDVI_G_PGTABLE_5_LEVEL) {
+        error_report("Invalid guest page table level");
+        trace_amd_viommu_invalid_dte("invalid guest page table level");
+        return false;
+    }
+
+    glx = (dte[0] & AMDVI_DEV_GLX_MASK) >> AMDVI_DEV_GLX_SHIFT;
+    if (glx == 3) {
+        error_report("Reserved GLX value (3)");
+        trace_amd_viommu_invalid_dte("reserved glx value");
+        return false;
+    }
+
+    return true;
+}
+
+static void amd_viommu_dte_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
+{
+    AMDIOMMUFDDevice *amd_idev = opaque;
+    int ret = 0;
+
+    /* Storing value in the devtab */
+    if (size ==  2) {
+        stw_le_p(&amd_idev->dte_info.dte8[offset], val);
+    } else if (size == 4) {
+        stl_le_p(&amd_idev->dte_info.dte8[offset], val);
+    } else if (size == 8) {
+        stq_le_p(&amd_idev->dte_info.dte8[offset], val);
+    }
+
+    /* Ignore writes to the second half of the DTE */
+    if (offset > AMDVI_MMIO_DEVTAB_ENTRY_SIZE / 2) {
+        return;
+    }
+
+    trace_amd_viommu_dte_write(offset, size,
+                               amd_idev->dte_info.dte64[0],
+                               amd_idev->dte_info.dte64[1],
+                               amd_idev->dte_info.dte64[2],
+                               amd_idev->dte_info.dte64[3]);
+
+    /* Write when guest has completed write to first 128 bits */
+    if (((amd_idev->dte_info.last_offset == 0 && offset == 8) ||
+         (amd_idev->dte_info.last_offset == 8 && offset == 0)) &&
+        amd_viommu_validate_dte(amd_idev->dte_info.dte64)) {
+        ret = amd_viommu_update_gcr3(amd_idev);
+        if (!ret) {
+            amd_idev->dte_info.last_offset = -1;
+        }
+    } else if (offset == 0 || offset == 8) {
+        amd_idev->dte_info.last_offset = offset;
+    }
+
+    return;
+}
+
+static void __amd_viommu_reset_dev_hwpt(AMDIOMMUFDDevice *amd_idev)
+{
+    uint32_t dev_id = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod)->devid;
+    int ret;
+
+    if (!amd_idev->vdevice_id) {
+        return;
+    }
+
+    memset(&amd_idev->dte_info.dte8, 0, AMDVI_MMIO_DEVTAB_ENTRY_SIZE);
+
+    trace_amd_viommu_reset_dev_hwpt(
+            dev_id, amd_idev->viommu->iommufd_state.pt_nested_hwpt_id);
+
+    ret = amd_viommu_device_attach_nested_hwpt(
+                            amd_idev,
+                            amd_idev->viommu->iommufd_state.pt_nested_hwpt_id);
+
+    if (ret) {
+        warn_report("could not attach vdevice id %d to passthrough domain",
+                    dev_id);
+    }
+}
+
+static void amd_viommu_reset_dev_hwpt(gpointer key, gpointer value,
+				                      gpointer user_data)
+{
+    AMDIOMMUFDDevice *amd_idev = value;
+
+    __amd_viommu_reset_dev_hwpt(amd_idev);
+}
+
+static void amd_viommu_reset_device_hwpt_all(AMDVIOMMUState *s)
+{
+    g_hash_table_foreach(s->iommufd_state.iommufd_dev_hash,
+                         amd_viommu_reset_dev_hwpt,
+                         NULL);
+}
+
 
 static const MemoryRegionOps dte_ops = {
-    .read = NULL,
-    .write = NULL,
+    .read = amd_viommu_dte_read,
+    .write = amd_viommu_dte_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl = {
         .min_access_size = 1,
@@ -353,6 +594,12 @@ static void amd_viommu_dealloc_vdev(gpointer key, gpointer value, gpointer user_
         return;
     }
 
+    /*
+     * Attach vdevice to passthrough domain before deallocating it so that
+     * DMAs initiated after vdevice dealloc works fine.
+     */
+    __amd_viommu_reset_dev_hwpt(amd_idev);
+
     trace_amd_viommu_dealloc_vdev(amd_idev->vdevice_id);
 
     iommufd_backend_free_id(amd_idev->viommu->iommufd_state.iommufd,
@@ -546,6 +793,7 @@ static bool amd_viommu_init_accel_mmio(AMDVIOMMUState *s)
 
 static bool amd_viommu_init_iommufd(AMDIOMMUFDState *s)
 {
+    struct iommu_hwpt_amd_guest pt_hwpt = {{0, 0, 0, 0}};
     Error *local_err = NULL;
 
     if (!iommufd_backend_alloc_viommu(s->iommufd, s->devid,
@@ -557,6 +805,18 @@ static bool amd_viommu_init_iommufd(AMDIOMMUFDState *s)
         error_reportf_err(local_err,
                           "Failed to allocate a amd-viommu iommufd type: ");
         return false;
+    }
+
+    if (!s->pt_nested_hwpt_id) {
+        if (!iommufd_backend_alloc_hwpt(s->iommufd, s->devid,
+                                        s->viommu_id, 0,
+                                        IOMMU_HWPT_DATA_AMD_GUEST,
+                                        sizeof(pt_hwpt), &pt_hwpt,
+                                        &s->pt_nested_hwpt_id, &local_err)) {
+            error_reportf_err(local_err,
+                              "Failed to allocate passthrough domain: ");
+            return false;
+        }
     }
 
     trace_amd_viommu_init_iommufd(s->viommu_id, s->devid, s->parent_hwpt_id);
@@ -619,17 +879,24 @@ static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
                                           int devfn)
 {
     AMDVIOMMUState *s = opaque;
+    AMDIOMMUFDDevice *amd_idev;
     AMDDeviceKey key = {
         .bus = bus,
         .devfn = devfn,
     };
 
-    if (!g_hash_table_lookup(s->iommufd_state.iommufd_dev_hash, &key)) {
+    if (!(amd_idev = g_hash_table_lookup(s->iommufd_state.iommufd_dev_hash, &key))) {
         return;
     }
 
     trace_amd_viommu_unset_iommu_device(pci_bus_num(bus), PCI_SLOT(devfn),
                                         PCI_FUNC(devfn));
+
+    memset(&amd_idev->dte_info.dte8, 0, AMDVI_MMIO_DEVTAB_ENTRY_SIZE);
+    host_iommu_device_iommufd_attach_hwpt(
+                                HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod),
+                                IOMMU_NO_PASID,
+                                s->iommufd_state.pt_nested_hwpt_id, NULL);
 
     g_hash_table_remove(s->iommufd_state.iommufd_dev_hash, &key);
 }
@@ -753,7 +1020,7 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     }
 
     if (!s->iommufd_state.devid) {
-        s->iommufd_state.devid = HOST_IOMMU_DEVICE_IOMMUFD(hiod)->devid;
+        s->iommufd_state.devid = idev->devid;
     }
 
     new_key = g_malloc(sizeof(AMDDeviceKey));
@@ -763,7 +1030,9 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
     amd_idev->viommu = s;
     amd_idev->hiod = hiod;
-    amd_idev->vdevice_id = 0;
+    amd_idev->nested_hwpt_id = 0;
+    amd_idev->dte_info.last_offset = -1;
+    memset(amd_idev->dte_info.dte8, 0, AMDVI_MMIO_DEVTAB_ENTRY_SIZE);
 
     g_hash_table_insert(iommufd_state->iommufd_dev_hash, new_key, amd_idev);
 
@@ -910,6 +1179,7 @@ static void amd_viommu_sysbus_reset(DeviceState *dev)
     AMDVIOMMUState *s = AMD_VIOMMU_DEVICE(dev);
 
     amd_viommu_dealloc_devtab(s);
+    amd_viommu_reset_device_hwpt_all(s);
 }
 
 static void amd_viommu_class_init(ObjectClass *klass, const void *data)

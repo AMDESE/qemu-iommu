@@ -130,13 +130,33 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_DEV_MODE_RSHIFT             9
 #define AMDVI_DEV_PT_ROOT_MASK            GENMASK64(51, 12)
 #define AMDVI_DEV_PT_ROOT_RSHIFT          12
+#define AMDVI_DEV_GCR3_14_12_MASK         GENMASK64(60, 58)
+#define AMDVI_DEV_GCR3_14_12_SHIFT        58
 #define AMDVI_DEV_G_TRANSLATION_VALID     (1ULL << 55)
 #define AMDVI_DEV_PERM_SHIFT              61
+#define AMDVI_DEV_GLX_MASK                GENMASK64(57, 56)
+#define AMDVI_DEV_GLX_SHIFT               56
 #define AMDVI_DEV_PERM_READ               (1ULL << 61)
 #define AMDVI_DEV_PERM_WRITE              (1ULL << 62)
 
 /* Device table entry bits 64:127 */
-#define AMDVI_DEV_DOMID_ID_MASK             GENMASK64(15, 0)
+#define AMDVI_DEV_DOMID_ID_MASK           GENMASK64(15, 0)
+#define AMDVI_DEV_GCR3_30_15_MASK         GENMASK64(31, 16)
+#define AMDVI_DEV_GCR3_30_15_SHIFT        16
+#define AMDVI_DEV_GCR3_51_31_MASK         GENMASK64(63, 43)
+#define AMDVI_DEV_GCR3_51_31_SHIFT        58
+
+/* Device table entry bits 128:191 */
+#define AMDVI_DEV_G_PAGING_MODE_MASK      GENMASK64(55, 54)
+#define AMDVI_DEV_G_PAGING_MODE_SHIFT     54
+
+#define AMDVI_DEV_QUAD0_RESERVED_MASK     ((1ULL << 63) | GENMASK64(3, 2))
+#define AMDVI_DEV_QUAD1_RESERVED_MASK     (0)
+#define AMDVI_DEV_QUAD2_RESERVED_MASK     (GENMASK64(53, 52))
+#define AMDVI_DEV_QUAD3_RESERVED_MASK     (GENMASK64(53, 48) | GENMASK64(14, 0))
+
+#define AMDVI_G_PGTABLE_4_LEVEL           (0)
+#define AMDVI_G_PGTABLE_5_LEVEL           (1)
 
 #define AMDVI_FEATURE_PREFETCH            (1ULL << 0) /* page prefetch       */
 #define AMDVI_FEATURE_PPR                 (1ULL << 1) /* PPR Support         */
