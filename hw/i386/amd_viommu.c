@@ -33,6 +33,109 @@ DEFINE_AMD_VIOMMU_WRITE(q, uint64_t, ldq_le_p, stq_le_p)
 
 DEFINE_AMD_IOMMU_MMIO_REG_WRITE(amd_viommu, AMDVIOMMUState)
 
+
+static const MemoryRegionOps dte_ops = {
+    .read = NULL,
+    .write = NULL,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+        .unaligned = false,
+    },
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+    }
+};
+
+static void amd_viommu_dealloc_dte_as(gpointer key, gpointer value,
+				                   gpointer user_data)
+{
+    struct AMDDeviceKey *bus_devfn = key;
+    AMDIOMMUFDDevice *amd_idev = value;
+
+    trace_amd_viommu_dealloc_dte_as(pci_bus_num(bus_devfn->bus),
+                                    PCI_SLOT(bus_devfn->devfn),
+                                    PCI_FUNC(bus_devfn->devfn));
+
+    memory_region_del_subregion(get_system_memory(), &amd_idev->mr_dte);
+    object_unparent(OBJECT(&amd_idev->mr_dte));
+}
+
+static void amd_viommu_dealloc_devtab(AMDVIOMMUState *s)
+{
+    if (!s->devtab_size)
+        return;
+
+    g_hash_table_foreach(s->iommufd_state.iommufd_dev_hash,
+                         amd_viommu_dealloc_dte_as,
+                         NULL);
+    s->devtab_base = 0;
+    s->devtab_size = 0;
+}
+
+static void amd_viommu_alloc_dte_as(gpointer key, gpointer value,
+				                  gpointer user_data)
+{
+    struct AMDDeviceKey *bus_devfn = key;
+    AMDIOMMUFDDevice *amd_idev = value;
+    AMDVIOMMUState *viommu = amd_idev->viommu;
+    hwaddr devtab_base = viommu->devtab_base;
+    uint16_t bdf;
+    uint64_t offset;
+    uint64_t devtab_end = devtab_base + viommu->devtab_size;
+    char name[30];
+
+    bdf = PCI_BUILD_BDF(pci_bus_num(bus_devfn->bus), bus_devfn->devfn);
+    offset = devtab_base + bdf * AMDVI_MMIO_DEVTAB_ENTRY_SIZE;
+
+    if (offset + AMDVI_MMIO_DEVTAB_ENTRY_SIZE > devtab_end) {
+        error_report("inadequate device table size, "
+                     "cannot allocate AS for DeviceID: %02x:%02x.%01x",
+                     PCI_BUS_NUM(bdf), PCI_SLOT(bdf), PCI_FUNC(bdf));
+        return;
+    }
+
+    snprintf(name, 30, "%s-%02u", "amd-iommu-devtab", amd_idev->viommu->iommu.index);
+    memory_region_init_io(&amd_idev->mr_dte, OBJECT(amd_idev->viommu),
+            &dte_ops, amd_idev, name,
+            AMDVI_MMIO_DEVTAB_ENTRY_SIZE);
+    memory_region_add_subregion_overlap(get_system_memory(), offset,
+            &amd_idev->mr_dte, 1);
+
+    trace_amd_viommu_alloc_dte_as(PCI_BUS_NUM(bdf), PCI_SLOT(bdf),
+                                  PCI_FUNC(bdf), offset);
+}
+
+static inline void amd_viommu_handle_devtab_write(AMDVIOMMUState *s)
+{
+    uint64_t val = amd_viommu_readq(s, AMDVI_MMIO_DEVICE_TABLE);
+
+    if (s->devtab_size) {
+        amd_viommu_dealloc_devtab(s);
+    }
+
+    s->devtab_base = (val & AMDVI_MMIO_DEVTAB_BASE_MASK);
+
+    /*
+     * The devtab_size is the size specifyied by guest indicated is
+     * (n + 1) * 4 Kbytes
+     */
+    s->devtab_size = ((val & AMDVI_MMIO_DEVTAB_SIZE_MASK) + 1) <<
+                     AMDVI_PAGE_SHIFT_4K;
+
+    trace_amd_viommu_devtab_write(s->devtab_base, s->devtab_size);
+
+    /*
+     * Set up memory listener for IOMMU DTE of the devices registered via
+     * set_iommu_device.
+     */
+    g_hash_table_foreach(s->iommufd_state.iommufd_dev_hash,
+                         amd_viommu_alloc_dte_as,
+                         NULL);
+}
+
 static void amd_viommu_intcapxt_decode(uint64_t val, uint32_t *vcpu_id,
                                        uint8_t *vector)
 {
@@ -356,6 +459,16 @@ static void amd_viommu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     case AMDVI_MMIO_XT_PPR_INT:
         if (!offset && size == 8) {
             amd_viommu_handle_xt_ppr_int_write(s);
+        }
+        break;
+    case AMDVI_MMIO_DEVICE_TABLE:
+       /*
+        *   set device table address
+        *   This also suffers from inability to tell whether software
+        *   is done writing
+        */
+        if (offset || (size == 8)) {
+            amd_viommu_handle_devtab_write(s);
         }
         break;
     }
@@ -714,6 +827,9 @@ static void amd_viommu_init(AMDVIOMMUState *s)
     amd_viommu_init_queue(&s->cmd_queue, IOMMU_HW_QUEUE_TYPE_AMD_CMD);
     amd_viommu_init_queue(&s->evt_queue, IOMMU_HW_QUEUE_TYPE_AMD_EVT);
     amd_viommu_init_queue(&s->ppr_queue, IOMMU_HW_QUEUE_TYPE_AMD_PPR);
+
+    s->devtab_size = 0;
+    s->devtab_base = 0;
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
@@ -791,6 +907,9 @@ static const VMStateDescription vmstate_amd_viommu_sysbus = {
 /* Stub call, will be filled later on */
 static void amd_viommu_sysbus_reset(DeviceState *dev)
 {
+    AMDVIOMMUState *s = AMD_VIOMMU_DEVICE(dev);
+
+    amd_viommu_dealloc_devtab(s);
 }
 
 static void amd_viommu_class_init(ObjectClass *klass, const void *data)

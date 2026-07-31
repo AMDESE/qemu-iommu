@@ -138,6 +138,9 @@ amd_viommu_alloc_hw_queue(const char *queue, uint64_t addr, uint64_t len, uint32
 amd_viommu_dealloc_hw_queue(uint32_t type, uint32_t hw_queue_id) "queue type %u hw_queue_id %u"
 amd_viommu_xt_int_write(const char *reg, uint64_t val) "%s 0x%"PRIx64
 amd_viommu_ext_int_remap(uint32_t type, uint32_t vcpu_id, uint8_t vector, int ret) "type %u vcpu_id %u vector 0x%"PRIx8" ret %d"
+amd_viommu_devtab_write(uint64_t base, uint64_t size) "devtab base 0x%"PRIx64" size 0x%"PRIx64
+amd_viommu_alloc_dte_as(uint8_t bus, uint8_t slot, uint8_t func, uint64_t offset) "dte region for devid: %02x:%02x.%x at 0x%"PRIx64
+amd_viommu_dealloc_dte_as(uint8_t bus, uint8_t slot, uint8_t func) "dte region for devid: %02x:%02x.%x"
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
