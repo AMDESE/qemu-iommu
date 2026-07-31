@@ -2,6 +2,7 @@
 
 #include "hw/core/qdev-properties.h"
 #include "hw/pci/pci_device.h"
+#include "migration/misc.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "hw/i386/pc.h"
@@ -351,6 +352,15 @@ static void amd_viommu_vm_state_change(void *opaque,
         amd_viommu_state_change_running(s);
         break;
     case RUN_STATE_SHUTDOWN:
+        /*
+         * Teardown destroys the iommufd vIOMMU, its vDEVICEs and the hardware
+         * queues.  It must not run while a migration is in flight: on the
+         * source that state still has to be saved, and on the destination it
+         * would race the restore sequence.  Only RUN_STATE_SHUTDOWN is handled
+         * here, which is what keeps teardown away from the migration run
+         * states, so catch any future path that breaks the assumption.
+         */
+        assert(!migration_is_running());
         amd_viommu_state_change_shutdown(s);
         break;
     default:
