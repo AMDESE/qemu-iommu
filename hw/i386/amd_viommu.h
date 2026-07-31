@@ -57,12 +57,16 @@ struct AMDVIOMMUState {
     AMDVIOMMUHwQueue cmd_queue;
     AMDVIOMMUHwQueue evt_queue;
     AMDVIOMMUHwQueue ppr_queue;
+
+    hwaddr devtab_base;
+    size_t devtab_size;
 };
 
 typedef struct AMDIOMMUFDDevice {
     AMDVIOMMUState *viommu;
     HostIOMMUDevice *hiod;
     uint32_t vdevice_id;
+    MemoryRegion mr_dte;
 } AMDIOMMUFDDevice;
 
 #define AMD_VIOMMU_SUPPORTED_EFR \
