@@ -28,6 +28,25 @@
 static void amd_viommu_vm_state_change(void *opaque,
                                         bool running, RunState state);
 
+/*
+ * vm change state handler priority for the vIOMMU.
+ *
+ * Handlers are kept sorted by ascending priority and are run forwards when the
+ * VM starts and backwards when it stops.  A single relationship therefore
+ * covers both directions: the vIOMMU must sort strictly before any VFIO
+ * endpoint behind it, so that on resume the vIOMMU is set up before the
+ * endpoint starts issuing DMA, and on stop the endpoint is stopped before the
+ * vIOMMU state it depends on is touched.
+ *
+ * VFIO registers via qdev_add_vm_change_state_handler_full(), which uses the
+ * device's qdev tree depth as the priority.  Any device sitting on a bus has a
+ * depth of at least one, so zero keeps the vIOMMU ahead of every endpoint.
+ * The depth helper is private to hw/core, so the relationship cannot be
+ * checked against VFIO at run time; pin our side of it here instead.
+ */
+#define AMD_VIOMMU_VM_STATE_PRIO 0
+QEMU_BUILD_BUG_ON(AMD_VIOMMU_VM_STATE_PRIO >= 1);
+
 static void amd_viommu_state_change_shutdown(AMDVIState *s);
 
 static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl);
@@ -1213,7 +1232,8 @@ static void amdvi_init(AMDVIState *s)
 	    s->dte_info[i].dte1 = ~0ULL;
     }
 
-    qemu_add_vm_change_state_handler(amd_viommu_vm_state_change, s);
+    qemu_add_vm_change_state_handler_prio(amd_viommu_vm_state_change, s,
+                                          AMD_VIOMMU_VM_STATE_PRIO);
 }
 
 
