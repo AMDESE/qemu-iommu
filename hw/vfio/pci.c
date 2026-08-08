@@ -3499,11 +3499,11 @@ static int vfio_pci_tsm_bind(PCIDevice *pdev, int kvmfd, Error **errp)
 }
 
 static int vfio_pci_tsm_guest_request(PCIDevice *pdev, void *req, size_t reqlen,
-                                      void *rsp, size_t rsplen, int *fw_err)
+                                      void *rsp, size_t rsplen, int *fw_err, uint32_t flags)
 {
     VFIOPCIDevice *vdev = VFIO_PCI(pdev);
 
-    return vfio_tsm_guest_request(&vdev->vbasedev, req, reqlen, rsp, rsplen, fw_err);
+    return vfio_tsm_guest_request(&vdev->vbasedev, req, reqlen, rsp, rsplen, fw_err, flags);
 }
 
 static int vfio_pci_tsm_remap(PCIDevice *pdev, uint64_t addr, Error **errp)
