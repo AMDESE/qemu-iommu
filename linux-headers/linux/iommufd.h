@@ -1414,6 +1414,7 @@ struct iommu_vdevice_tsm_bind {
 #define IOMMU_VDEVICE_TSM_SCOPE_REQ_STATE_CHANGE	1
 #define IOMMU_VDEVICE_TSM_SCOPE_REQ_DEBUG_READ		2
 #define IOMMU_VDEVICE_TSM_SCOPE_REQ_DEBUG_WRITE		3
+#define IOMMU_VDEVICE_TSM_SCOPE_REQ_ENABLE_DTE		4
 
 struct iommu_vdevice_tsm_guest_request {
 	__u32 size;
