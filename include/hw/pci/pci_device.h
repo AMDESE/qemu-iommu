@@ -377,7 +377,7 @@ struct PCIETSMIfClass {
 
     int (*tsm_bind)(PCIDevice *pdev, int kvmfd, Error **errp);
     int (*tsm_guest_request)(PCIDevice *vdev, void *req, size_t reqlen,
-                             void *rsp, size_t rsplen, int *fw_err);
+                             void *rsp, size_t rsplen, int *fw_err, uint32_t flags);
     int (*tsm_remap)(PCIDevice *pdev, uint64_t addr, Error **errp);
 };
 

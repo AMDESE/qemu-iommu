@@ -349,7 +349,7 @@ void vfio_device_init(VFIODevice *vbasedev, int type, VFIODeviceOps *ops,
 int vfio_device_get_aw_bits(VFIODevice *vdev);
 int vfio_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp);
 int vfio_tsm_guest_request(VFIODevice *vbasedev, void *req, size_t reqlen,
-                           void *rsp, size_t rsplen, int *fw_err);
+                           void *rsp, size_t rsplen, int *fw_err, uint32_t flags);
 int vfio_tsm_remap(VFIODevice *vbasedev, uint64_t addr, Error **errp);
 
 #endif /* HW_VFIO_VFIO_COMMON_H */

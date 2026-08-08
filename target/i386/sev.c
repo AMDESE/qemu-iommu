@@ -2356,6 +2356,10 @@ static int kvm_handle_vmgexit_tio_req(SevCommonState *sev_common, struct kvm_use
         } else {
             tsmk->tsm_remap(pdev, 0, &err);
         }
+
+        /* Update DTE and IOMMU page table */
+        ret = tsmk->tsm_guest_request(pdev, req, 4096, rsp, 4096, &fw_err,
+				      IOMMU_VDEVICE_TSM_SCOPE_REQ_ENABLE_DTE);
     }
 
     /* Trigger the data collection now so TDI_INFO digests are fresh */
@@ -2363,7 +2367,7 @@ static int kvm_handle_vmgexit_tio_req(SevCommonState *sev_common, struct kvm_use
         sev_tio_store_certs(vdev, ex->tio_req.flags, data, data_len, sev_common->tsm_helper);
     }
 
-    ret = tsmk->tsm_guest_request(pdev, req, 4096, rsp, 4096, &fw_err);
+    ret = tsmk->tsm_guest_request(pdev, req, 4096, rsp, 4096, &fw_err, 0);
 
     ex->tio_req.fw_err = fw_err;
 
@@ -2464,7 +2468,7 @@ static int kvm_handle_vmgexit_tio_op(SevCommonState *sev_common, struct kvm_user
     } else /* RUN or STOP */ {
         uint8_t runstate = ex->tio_op.op == KVM_USER_SVM_VMGEXIT_SEV_TIO_OP_RUN;
 
-        ret = tsmk->tsm_guest_request(pdev, &runstate, sizeof(runstate), NULL, 0, &fw_err);
+        ret = tsmk->tsm_guest_request(pdev, &runstate, sizeof(runstate), NULL, 0, &fw_err, 0);
 
         trace_sev_tio_op(dom, bus, slot, func,
                          runstate ? "RUN" : "STOP", 0, ret, fw_err, 0);

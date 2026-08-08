@@ -890,7 +890,7 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
 static int iommufd_tsm_guest_request(VFIODevice *vbasedev,
                                      void *req, size_t reqlen,
                                      void *rsp, size_t rsplen,
-                                     int *fw_err)
+                                     int *fw_err, uint32_t flags)
 {
     HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(vbasedev->hiod);
     int ret = 0;
@@ -898,7 +898,7 @@ static int iommufd_tsm_guest_request(VFIODevice *vbasedev,
     if (idev->vdevice) {
         ret = iommufd_backend_tsm_guest_request(idev->vdevice,
                                                 req, reqlen, rsp, rsplen,
-                                                fw_err);
+                                                fw_err, flags);
     } else {
         printf("+++Q+++ (%u) %s %u: iommufd vdevice not present\n", getpid(), __func__, __LINE__);
     }

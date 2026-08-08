@@ -168,7 +168,7 @@ struct VFIOIOMMUClass {
 
     int (*tsm_bind)(VFIODevice *vdev, int kvmfd, Error **errp);
     int (*tsm_guest_request)(VFIODevice *vdev, void *req, size_t reqlen,
-                             void *rsp, size_t rsplen, int *fw_err);
+                             void *rsp, size_t rsplen, int *fw_err, uint32_t flags);
     int (*tsm_remap)(VFIODevice *vdev, uint64_t addr, Error **errp);
 };
 #endif /* HW_VFIO_VFIO_CONTAINER_BASE_H */

@@ -466,7 +466,7 @@ int iommufd_backend_tsm_bind(struct IOMMUFDVdev *vdev, int kvmfd)
 int iommufd_backend_tsm_guest_request(struct IOMMUFDVdev *vdev,
                                       void *req, size_t reqlen,
                                       void *rsp, size_t rsplen,
-                                      int *fw_err)
+                                      int *fw_err, uint32_t flags)
 {
     IOMMUFDViommu *viommu = vdev->viommu;
     HostIOMMUDeviceIOMMUFD *idev = vdev->idev;
@@ -494,6 +494,9 @@ int iommufd_backend_tsm_guest_request(struct IOMMUFDVdev *vdev,
     if (rsplen == 0) {
         gr.scope = IOMMU_VDEVICE_TSM_SCOPE_REQ_STATE_CHANGE;
     }
+
+    if (flags)
+        gr.scope = flags;
 
     ret = ioctl(fd, IOMMU_VDEVICE_TSM_GUEST_REQUEST, &gr);
     *fw_err = gr.fw_err;

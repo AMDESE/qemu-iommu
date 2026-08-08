@@ -1519,13 +1519,13 @@ int vfio_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
 }
 
 int vfio_tsm_guest_request(VFIODevice *vbasedev, void *req, size_t reqlen,
-                           void *rsp, size_t rsplen, int *fw_err)
+                           void *rsp, size_t rsplen, int *fw_err, uint32_t flags)
 {
     int rc = -ENOTSUP;
     const VFIOIOMMUClass *ops = VFIO_IOMMU_GET_CLASS(vbasedev->bcontainer);
 
     if (ops->tsm_guest_request) {
-        rc = ops->tsm_guest_request(vbasedev, req, reqlen, rsp, rsplen, fw_err);
+        rc = ops->tsm_guest_request(vbasedev, req, reqlen, rsp, rsplen, fw_err, flags);
     }
 
     trace_vfio_tsm_guest_request(vbasedev->name, vbasedev->fd, rc);
