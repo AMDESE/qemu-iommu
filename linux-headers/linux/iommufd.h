@@ -58,6 +58,7 @@ enum {
 	IOMMUFD_CMD_VEVENTQ_ALLOC = 0x93,
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
 	IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP = 0x95,
+	IOMMUFD_CMD_VIOMMU_MIG_STATE = 0x96,
 };
 
 /**
@@ -686,11 +687,30 @@ enum iommu_hw_info_type {
  * @IOMMU_HW_CAP_PCI_PASID_PRIV: Privileged Mode Supported, user ignores it
  *                               when the struct
  *                               iommu_hw_info::out_max_pasid_log2 is zero.
+ * @IOMMU_HW_CAP_PCI_ATS_NOT_SUPPORTED: ATS is not supported or cannot be used
+ *                                      on this device (absence implies ATS
+ *                                      may be enabled)
+ * @IOMMU_HW_CAP_VIOMMU_MIGRATION: The IOMMU behind this device can save and
+ *                                 restore the state of a vIOMMU allocated on
+ *                                 it. If available, it means the following
+ *                                 API is supported:
+ *
+ *                                     IOMMU_VIOMMU_MIG_STATE
+ *
+ *                                 This describes that IOMMU, not any one
+ *                                 vIOMMU allocated on it. A vIOMMU of a
+ *                                 type it cannot migrate still fails
+ *                                 IOMMU_VIOMMU_MIG_STATE with EOPNOTSUPP,
+ *                                 so a VMM that needs certainty for a
+ *                                 specific vIOMMU should allocate it and
+ *                                 probe with IOMMU_VIOMMU_MIG_OP_GET_SIZE
  */
 enum iommufd_hw_capabilities {
 	IOMMU_HW_CAP_DIRTY_TRACKING = 1 << 0,
 	IOMMU_HW_CAP_PCI_PASID_EXEC = 1 << 1,
 	IOMMU_HW_CAP_PCI_PASID_PRIV = 1 << 2,
+	IOMMU_HW_CAP_PCI_ATS_NOT_SUPPORTED = 1 << 3,
+	IOMMU_HW_CAP_VIOMMU_MIGRATION = 1 << 4,
 };
 
 /**
@@ -1154,6 +1174,137 @@ struct iommu_viommu_ext_int_remap {
 #define IOMMU_VIOMMU_EXT_INT_REMAP \
 	_IOW(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_EXT_INT_REMAP, \
 	     struct iommu_viommu_ext_int_remap)
+
+/**
+ * enum iommu_viommu_mig_section - Sections of a vIOMMU migration payload
+ * @IOMMU_VIOMMU_MIG_SECTION_VFCTRL: Guest control state not covered by the
+ *                                   hardware queue section
+ * @IOMMU_VIOMMU_MIG_SECTION_HW_QUEUE: Per-ring hardware queue records
+ * @IOMMU_VIOMMU_MIG_SECTION_EVTLOG: Event log ring contents
+ * @IOMMU_VIOMMU_MIG_SECTION_PPRLOG: PPR log ring contents
+ * @IOMMU_VIOMMU_MIG_SECTION_STATUS: Guest-visible IOMMU status register
+ *
+ * Section contents are opaque to userspace. The mask tells a destination which
+ * sections a payload carries, so that new state can be added without changing
+ * the size of struct iommu_viommu_mig_header.
+ */
+enum iommu_viommu_mig_section {
+	IOMMU_VIOMMU_MIG_SECTION_VFCTRL = 1 << 0,
+	IOMMU_VIOMMU_MIG_SECTION_HW_QUEUE = 1 << 1,
+	IOMMU_VIOMMU_MIG_SECTION_EVTLOG = 1 << 2,
+	IOMMU_VIOMMU_MIG_SECTION_PPRLOG = 1 << 3,
+	IOMMU_VIOMMU_MIG_SECTION_STATUS = 1 << 4,
+};
+
+/**
+ * struct iommu_viommu_mig_header - vIOMMU migration payload header
+ * @blob_format_version: Format of the opaque payload
+ * @blob_type: vIOMMU type the payload was saved from, one of
+ *             enum iommu_viommu_type
+ * @feature_flags: Source-side features the payload depends on. No flags are
+ *                 defined yet, so this is 0 today and a destination rejects a
+ *                 payload that sets any bit: unlike a section, which a reader
+ *                 may skip, a feature is a promise the destination has to keep
+ * @section_mask: Sections present in the payload, a mask of
+ *                enum iommu_viommu_mig_section
+ * @payload_size: Bytes of opaque payload accompanying this header
+ * @min_reader_version: Lowest @blob_format_version able to consume this
+ *                      payload. A destination supporting less must reject it
+ * @evtlog_bytes: Event log content bytes within the payload
+ * @pprlog_bytes: PPR log content bytes within the payload
+ * @cmdbuf_bytes: Guest command buffer extent. Metadata only; the contents
+ *                travel as guest RAM
+ * @source_gid: Source guest ID. Diagnostics only, never programmed on restore
+ * @__reserved: Must be 0
+ *
+ * Written by the kernel on IOMMU_VIOMMU_MIG_OP_SAVE and handed back unmodified
+ * on IOMMU_VIOMMU_MIG_OP_RESTORE. Describes an opaque payload without exposing
+ * its layout, so that a destination can reject an incompatible payload before
+ * touching any hardware.
+ *
+ * This structure is fixed at 64 bytes and must not grow: a VMM is expected to
+ * carry it as an opaque fixed-size blob in its own migration stream, so a size
+ * change would silently break VMM compatibility. Add new state as a new
+ * @section_mask section instead.
+ */
+struct iommu_viommu_mig_header {
+	__u32 blob_format_version;
+	__u32 blob_type;
+	__aligned_u64 feature_flags;
+	__aligned_u64 section_mask;
+	__u32 payload_size;
+	__u32 min_reader_version;
+	__u32 evtlog_bytes;
+	__u32 pprlog_bytes;
+	__u32 cmdbuf_bytes;
+	__u32 source_gid;
+	__u32 __reserved[4];
+};
+
+/**
+ * enum iommu_viommu_mig_op - vIOMMU migration operations
+ * @IOMMU_VIOMMU_MIG_OP_GET_SIZE: Report the payload size needed to save this
+ *                                vIOMMU. Does not change migration state
+ * @IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE: Quiesce the vIOMMU: drain in-flight guest
+ *                                    commands, fence them, and freeze log
+ *                                    generation
+ * @IOMMU_VIOMMU_MIG_OP_SAVE: Write the header and payload out
+ * @IOMMU_VIOMMU_MIG_OP_RESTORE: Consume a header and payload, validating them
+ *                               against the objects userspace has allocated
+ * @IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE: Apply the restored state to hardware,
+ *                                      arm the queues and invalidate caches
+ * @IOMMU_VIOMMU_MIG_OP_ABORT: Abandon an in-progress save or restore
+ *
+ * Save runs GET_SIZE, PREPARE_SAVE then SAVE; restore runs RESTORE then
+ * COMMIT_RESTORE. ABORT is valid at any point. Operations out of sequence fail
+ * with EINVAL rather than acting on partially validated state.
+ */
+enum iommu_viommu_mig_op {
+	IOMMU_VIOMMU_MIG_OP_GET_SIZE = 0,
+	IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE = 1,
+	IOMMU_VIOMMU_MIG_OP_SAVE = 2,
+	IOMMU_VIOMMU_MIG_OP_RESTORE = 3,
+	IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE = 4,
+	IOMMU_VIOMMU_MIG_OP_ABORT = 5,
+};
+
+/**
+ * struct iommu_viommu_mig_state - ioctl(IOMMU_VIOMMU_MIG_STATE)
+ * @size: sizeof(struct iommu_viommu_mig_state)
+ * @flags: Must be 0
+ * @viommu_id: vIOMMU ID from IOMMU_VIOMMU_ALLOC
+ * @op: One of enum iommu_viommu_mig_op
+ * @data_len: Input, bytes available at @data_uptr. Output, bytes required
+ *            (GET_SIZE) or bytes written (SAVE)
+ * @timeout_ms: Input, how long PREPARE_SAVE may wait for guest commands to
+ *              drain. Ignored by every other operation
+ * @data_uptr: User pointer to the opaque payload buffer
+ * @hdr_uptr: User pointer to a struct iommu_viommu_mig_header
+ * @hdr_len: Input, bytes available at @hdr_uptr. Output, bytes the kernel
+ *           supports
+ * @out_status: Output, operation-specific completion detail
+ *
+ * Save and restore the migration state of a vIOMMU. The header and payload are
+ * separate buffers so that a VMM can validate the header, and gate on the
+ * fields it understands, without parsing the payload.
+ *
+ * A payload is only meaningful to a destination whose driver reports
+ * IOMMU_HW_CAP_VIOMMU_MIGRATION and whose supported blob format covers
+ * @min_reader_version.
+ */
+struct iommu_viommu_mig_state {
+	__u32 size;
+	__u32 flags;
+	__u32 viommu_id;
+	__u32 op;
+	__u32 data_len;
+	__u32 timeout_ms;
+	__aligned_u64 data_uptr;
+	__aligned_u64 hdr_uptr;
+	__u32 hdr_len;
+	__u32 out_status;
+};
+#define IOMMU_VIOMMU_MIG_STATE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_VIOMMU_MIG_STATE)
 
 /**
  * struct iommu_vdevice_alloc - ioctl(IOMMU_VDEVICE_ALLOC)
