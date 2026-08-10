@@ -97,6 +97,11 @@ IOMMUFDViommu *iommufd_backend_alloc_viommu(IOMMUFDBackend *be,
                                             uint32_t hwpt_id,
                                             uint32_t data_len,
                                             void *data_uptr);
+bool iommufd_backend_viommu_mig_state(IOMMUFDBackend *be, uint32_t viommu_id,
+                                      uint32_t op, uint32_t timeout_ms,
+                                      struct iommu_viommu_mig_header *hdr,
+                                      void *data, uint32_t *data_len,
+                                      uint32_t *out_status, Error **errp);
 
 bool iommufd_change_process_capable(IOMMUFDBackend *be);
 bool iommufd_change_process(IOMMUFDBackend *be, Error **errp);
