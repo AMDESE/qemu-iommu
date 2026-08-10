@@ -68,13 +68,18 @@ QEMU_BUILD_BUG_ON(AMD_VIOMMU_VM_STATE_PRIO >= 1);
 
 static void amd_viommu_state_change_shutdown(AMDVIState *s);
 
-static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl);
-static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl);
-static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl);
+static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked);
+static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked);
+static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked);
 
 static void amdvi_free_cmdbuf_hwq(AMDVIState *s);
 static void amdvi_free_evtlog_hwq(AMDVIState *s);
 static void amdvi_free_pprlog_hwq(AMDVIState *s);
+
+static uint64_t amdvi_readq(AMDVIState *s, hwaddr addr);
 
 static int amd_viommu_mmap_vf_mmio(AMDVIState *s)
 {
@@ -655,6 +660,51 @@ static void amdvi_mig_restore_failed(AMDVIState *s, Error *err)
  * been allocated.  Every kernel operation unwinds itself on failure, so there
  * is no abort to issue here.
  */
+/*
+ * Recreate the hardware queues the source had, reading their configuration out
+ * of the already-restored register file.
+ *
+ * MIG_STATE RESTORE writes head, tail, status and ring contents into queues
+ * that must already exist, so this has to run before it.  The queues are
+ * allocated with their enable bits masked and are armed by COMMIT_RESTORE
+ * (D-015), which keeps the window between the two from letting the hardware
+ * consume a ring the kernel has not finished filling in.
+ *
+ * The rings selected here are the ones amdvi_handle_control_write() would have
+ * allocated on the source for the same control value, so a ring the guest
+ * never enabled stays unallocated on the destination too.
+ */
+static int amdvi_mig_replay_hw_queues(AMDVIState *s, Error **errp)
+{
+    unsigned long ctrl = amdvi_readq(s, AMDVI_MMIO_CONTROL);
+
+    if (ctrl & (1 << 12)) {
+        amdvi_handle_cmdbase_write(s, ctrl, true);
+        if (!s->cmdbuf_hwq) {
+            error_setg(errp, "amd-viommu: failed to replay the command buffer");
+            return -EIO;
+        }
+    }
+    if (ctrl & (1 << 2)) {
+        amdvi_handle_evtbase_write(s, ctrl, true);
+        if (!s->evtlog_hwq) {
+            error_setg(errp, "amd-viommu: failed to replay the event log");
+            return -EIO;
+        }
+    }
+    if (ctrl & (1 << 13)) {
+        amdvi_handle_pprbase_write(s, ctrl, true);
+        if (!s->pprlog_hwq) {
+            error_setg(errp, "amd-viommu: failed to replay the PPR log");
+            return -EIO;
+        }
+    }
+
+    trace_amdvi_mig_replayed_hw_queues(s->core->viommu_id, ctrl);
+
+    return 0;
+}
+
 static void amdvi_mig_restore(AMDVIState *s)
 {
     Error *local_err = NULL;
@@ -680,6 +730,11 @@ static void amdvi_mig_restore(AMDVIState *s)
     if (!s->mig_supported) {
         error_setg(&local_err,
                    "amd-viommu: the host IOMMU cannot restore vIOMMU state");
+        amdvi_mig_restore_failed(s, local_err);
+        goto out;
+    }
+
+    if (amdvi_mig_replay_hw_queues(s, &local_err)) {
         amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
@@ -1131,17 +1186,29 @@ static inline void amdvi_handle_control_write(AMDVIState *s)
      *    - PprAutoRspAon (bit 42)
      */
     if (ctrl & (1 << 12)) {
-        amdvi_handle_cmdbase_write(s, ctrl);
+        amdvi_handle_cmdbase_write(s, ctrl, false);
     }
     if (ctrl & (1 << 2)) {
-        amdvi_handle_evtbase_write(s, ctrl);
+        amdvi_handle_evtbase_write(s, ctrl, false);
     }
     if (ctrl & (1 << 13)) {
-        amdvi_handle_pprbase_write(s, ctrl);
+        amdvi_handle_pprbase_write(s, ctrl, false);
     }
 }
 
-static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl)
+/*
+ * Allocate the hardware queue described by the command buffer registers.
+ *
+ * With @masked the queue is allocated with its enable bits cleared and the
+ * dedup cache is ignored, which is what the restore path needs: the queue has
+ * to exist for MIG_STATE RESTORE to write head, tail and status into, but must
+ * not run until COMMIT_RESTORE arms it (D-015).  The cache still records the
+ * flags the guest programmed, because those are the ones COMMIT_RESTORE
+ * applies, and a later identical guest write must dedup rather than tear the
+ * restored queue down.
+ */
+static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_COMMAND_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
@@ -1153,7 +1220,7 @@ static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl)
     if (ctrl & (1UL << 4))
         flags |= IOMMU_HW_QUEUE_FLAG_AMD_COMWAIT_EN;
 
-    if (s->cmdbuf_hwq &&
+    if (!masked && s->cmdbuf_hwq &&
         s->cmdbuf_hwq_reg_addr == addr &&
         s->cmdbuf_hwq_reg_len == len &&
         s->cmdbuf_hwq_reg_flags == flags) {
@@ -1166,7 +1233,7 @@ static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl)
 
     s->cmdbuf_hwq = iommufd_viommu_alloc_hw_queue(s->core,
                                           IOMMU_HW_QUEUE_TYPE_AMD_CMD,
-                                          0, addr, len, flags);
+                                          0, addr, len, masked ? 0 : flags);
     if (!s->cmdbuf_hwq) {
         error_report("%s: failed to allocate command buffer\n", __func__);
         return;
@@ -1176,7 +1243,9 @@ static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl)
     s->cmdbuf_hwq_reg_flags = flags;
 }
 
-static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl)
+/* See amdvi_handle_cmdbase_write() for what @masked means. */
+static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_EVENT_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
@@ -1188,7 +1257,7 @@ static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl)
     if (ctrl & (1UL << 3))
         flags |= IOMMU_HW_QUEUE_FLAG_AMD_EVT_INT_EN;
 
-    if (s->evtlog_hwq &&
+    if (!masked && s->evtlog_hwq &&
         s->evtlog_hwq_reg_addr == addr &&
         s->evtlog_hwq_reg_len == len &&
         s->evtlog_hwq_reg_flags == flags) {
@@ -1201,7 +1270,7 @@ static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl)
 
     s->evtlog_hwq = iommufd_viommu_alloc_hw_queue(s->core,
                                           IOMMU_HW_QUEUE_TYPE_AMD_EVT,
-                                          0, addr, len, flags);
+                                          0, addr, len, masked ? 0 : flags);
     if (!s->evtlog_hwq) {
         error_report("%s: failed to allocate event log\n", __func__);
         return;
@@ -1211,7 +1280,9 @@ static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl)
     s->evtlog_hwq_reg_flags = flags;
 }
 
-static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl)
+/* See amdvi_handle_cmdbase_write() for what @masked means. */
+static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl,
+                                       bool masked)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_PPR_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
@@ -1231,7 +1302,7 @@ static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl)
     if (ctrl & (1UL << 42))
         flags |= IOMMU_HW_QUEUE_FLAG_AMD_PPR_AUTO_RSP_AON;
 
-    if (s->pprlog_hwq &&
+    if (!masked && s->pprlog_hwq &&
         s->pprlog_hwq_reg_addr == addr &&
         s->pprlog_hwq_reg_len == len &&
         s->pprlog_hwq_reg_flags == flags) {
@@ -1244,7 +1315,7 @@ static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl)
 
     s->pprlog_hwq = iommufd_viommu_alloc_hw_queue(s->core,
                                           IOMMU_HW_QUEUE_TYPE_AMD_PPR,
-                                          0, addr, len, flags);
+                                          0, addr, len, masked ? 0 : flags);
     if (!s->pprlog_hwq) {
         error_report("%s: failed to allocate ppr log\n", __func__);
         return;
