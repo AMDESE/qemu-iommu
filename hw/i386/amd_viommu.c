@@ -386,6 +386,8 @@ static AMDIOMMUFDDevice *amd_viommu_get_device_from_bdf(AMDVIState *s,
                                                         uint16_t devfn);
 static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
                                   uint16_t dev_id, uint64_t *dte);
+static inline int amdvi_handle_xt_event_int_write(AMDVIState *s);
+static inline int amdvi_handle_xt_ppr_int_write(AMDVIState *s);
 
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
@@ -793,6 +795,38 @@ static bool amdvi_dev_replay_nested(AMDVIState *s, Error **errp)
     return true;
 }
 
+/*
+ * Re-establish the EventLog and PPRLog interrupt routes.
+ *
+ * These are host state: an ext-IRTE names a destination vCPU and vector on the
+ * host the vIOMMU lives on, so nothing the source captured can be handed over
+ * and the destination has to program its own from the guest's XT registers.
+ * Those registers cross in mmior[], and a guest writing one is exactly what
+ * drives this on a cold boot, so the same handlers are reused here.
+ *
+ * A register the guest never programmed reads back zero, which the remap call
+ * treats as nothing to do.
+ */
+static bool amdvi_mig_replay_ext_int(AMDVIState *s, Error **errp)
+{
+    if (amdvi_handle_xt_event_int_write(s)) {
+        error_setg(errp, "amd-viommu: failed to replay the event log "
+                   "interrupt route");
+        return false;
+    }
+
+    if (amdvi_handle_xt_ppr_int_write(s)) {
+        error_setg(errp, "amd-viommu: failed to replay the PPR log "
+                   "interrupt route");
+        return false;
+    }
+
+    trace_amdvi_mig_replayed_ext_int(amdvi_readq(s, AMDVI_MMIO_XT_EVENT_INT),
+                                     amdvi_readq(s, AMDVI_MMIO_XT_PPR_INT));
+
+    return true;
+}
+
 static void amdvi_mig_restore(AMDVIState *s)
 {
     Error *local_err = NULL;
@@ -841,6 +875,11 @@ static void amdvi_mig_restore(AMDVIState *s)
      * the rebuilt nested domains have already populated.
      */
     if (!amdvi_dev_replay_nested(s, &local_err)) {
+        amdvi_mig_restore_failed(s, local_err);
+        goto out;
+    }
+
+    if (!amdvi_mig_replay_ext_int(s, &local_err)) {
         amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
@@ -1492,18 +1531,18 @@ static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl,
     s->pprlog_hwq_reg_flags = flags;
 }
 
-static inline void amdvi_handle_xt_event_int_write(AMDVIState *s)
+static inline int amdvi_handle_xt_event_int_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_XT_EVENT_INT);
 
-    amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_EVENT, val);
+    return amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_EVENT, val);
 }
 
-static inline void amdvi_handle_xt_ppr_int_write(AMDVIState *s)
+static inline int amdvi_handle_xt_ppr_int_write(AMDVIState *s)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_XT_PPR_INT);
 
-    amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_PPR, val);
+    return amd_viommu_ext_int_remap(s, IOMMU_VIOMMU_EXT_INT_PPR, val);
 }
 
 /* FIXME: something might go wrong if System Software writes in chunks
