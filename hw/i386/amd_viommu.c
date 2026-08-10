@@ -1157,9 +1157,95 @@ static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
             AMDVI_MAX_PH_ADDR | AMDVI_MAX_GVA_ADDR | AMDVI_MAX_VA_ADDR);
 }
 
+/* Nothing to carry when the kernel gave us no payload to hand back. */
+static bool amdvi_iommufd_mig_needed(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    return s->mig_blob_len > 0;
+}
+
+/*
+ * Uses .post_load_errp rather than .post_load so that the reason a payload was
+ * rejected travels with the failure, instead of being printed separately from
+ * the error the migration ends up reporting.
+ */
+static bool amdvi_iommufd_mig_post_load(void *opaque, int version_id,
+                                        Error **errp)
+{
+    AMDVIState *s = opaque;
+
+    /*
+     * The echoes travelled as scalars and the header as raw bytes, so a
+     * disagreement means the two describe different payloads. Refuse here
+     * rather than hand the kernel a header its own payload contradicts.
+     */
+    if (s->mig_hdr_version != s->mig_hdr.blob_format_version) {
+        error_setg(errp, "amd-viommu: migrated payload header format %u does "
+                   "not match its echo %u", s->mig_hdr.blob_format_version,
+                   s->mig_hdr_version);
+        return false;
+    }
+
+    if (s->mig_hdr_payload_size != s->mig_hdr.payload_size) {
+        error_setg(errp, "amd-viommu: migrated payload header size %u does not "
+                   "match its echo %u", s->mig_hdr.payload_size,
+                   s->mig_hdr_payload_size);
+        return false;
+    }
+
+    if (s->mig_hdr.payload_size != s->mig_blob_len) {
+        error_setg(errp, "amd-viommu: migrated payload header describes %u "
+                   "bytes but %u bytes arrived", s->mig_hdr.payload_size,
+                   s->mig_blob_len);
+        return false;
+    }
+
+    return true;
+}
+
+/*
+ * Carrying the header as raw bytes makes its size part of the migration wire
+ * format, so a UAPI that grew it would break compatibility between QEMU
+ * versions silently. The kernel promises 64 bytes forever; hold it to that.
+ */
+QEMU_BUILD_BUG_ON(sizeof(struct iommu_viommu_mig_header) != 64);
+
+/*
+ * The amd-viommu/ prefix is required, not cosmetic: vmstate_subsection_load()
+ * returns success when a name does not match the parent's prefix, so a
+ * mis-named subsection would be skipped and the destination would resume on an
+ * unconfigured vIOMMU.
+ */
+static const VMStateDescription vmstate_amd_viommu_iommufd_mig = {
+    .name = "amd-viommu/iommufd-mig",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = amdvi_iommufd_mig_needed,
+    .post_load_errp = amdvi_iommufd_mig_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(mig_hdr_version, AMDVIState),
+        VMSTATE_UINT32(mig_hdr_payload_size, AMDVIState),
+        /* Sizes @mig_blob's allocation on load, so it has to precede it. */
+        VMSTATE_UINT32(mig_blob_len, AMDVIState),
+        VMSTATE_BUFFER_UNSAFE(mig_hdr, AMDVIState, 0,
+                              sizeof(struct iommu_viommu_mig_header)),
+        VMSTATE_VBUFFER_ALLOC_UINT32(mig_blob, AMDVIState, 0, NULL,
+                                     mig_blob_len),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_amd_viommu = {
     .name = "amd-viommu",
-    .unmigratable = 1
+    .unmigratable = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription * const []) {
+        &vmstate_amd_viommu_iommufd_mig,
+        NULL
+    }
 };
 
 static PCIBus *get_root_bus(struct PCIBus *bus)
