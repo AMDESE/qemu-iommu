@@ -151,6 +151,15 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
         return -EINVAL;
     }
 
+    /*
+     * The capability describes the host IOMMU this vIOMMU was allocated on. It
+     * says that IOMMU can migrate a vIOMMU, not that it can migrate this one:
+     * a vIOMMU of a type it cannot handle still refuses IOMMU_VIOMMU_MIG_STATE.
+     */
+    s->mig_supported = !!(amd_idev->hiod->caps.hw_caps &
+                          IOMMU_HW_CAP_VIOMMU_MIGRATION);
+    trace_amdvi_viommu_mig_supported(idev->devid, s->mig_supported);
+
     s->enabled = true;
     return 0;
 }
