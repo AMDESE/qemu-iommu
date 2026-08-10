@@ -47,6 +47,14 @@ static void amd_viommu_vm_state_change(void *opaque,
 #define AMD_VIOMMU_VM_STATE_PRIO 0
 QEMU_BUILD_BUG_ON(AMD_VIOMMU_VM_STATE_PRIO >= 1);
 
+/*
+ * Budget PREPARE_SAVE gets to drain the guest command ring and fence the
+ * completions behind it.  The kernel uses the value as given and has no
+ * default of its own, so zero would ask it to work to a deadline that has
+ * already passed.
+ */
+#define AMD_VIOMMU_MIG_DRAIN_TIMEOUT_MS 5000
+
 static void amd_viommu_state_change_shutdown(AMDVIState *s);
 
 static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl);
@@ -370,6 +378,111 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
     g_free(s->core);
     s->core = NULL;
 }
+static void amdvi_mig_payload_reset(AMDVIState *s)
+{
+    g_free(s->mig_blob);
+    s->mig_blob = NULL;
+    s->mig_blob_len = 0;
+    s->mig_hdr_version = 0;
+    s->mig_hdr_payload_size = 0;
+    memset(&s->mig_hdr, 0, sizeof(s->mig_hdr));
+}
+
+/*
+ * Hand a quiesced vIOMMU back to the guest.  Only reachable when the save
+ * failed, and there is nothing to do about a failure to unwind beyond saying
+ * so, since the caller is already on an error path.
+ */
+static void amdvi_mig_abort(AMDVIState *s)
+{
+    Error *local_err = NULL;
+
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_ABORT, 0, NULL,
+                                          NULL, NULL, NULL, &local_err)) {
+        warn_report_err(local_err);
+    }
+}
+
+/*
+ * Park the kernel's migration payload where VMState can pick it up.
+ *
+ * A failure has to abort the migration rather than just complain: leaving the
+ * payload empty stops the subsection from being sent, and the destination would
+ * then resume on an unconfigured vIOMMU with nothing to say why.  Run state
+ * handlers cannot report failures, so take the same route as VFIO and set the
+ * error on the migration stream.  It takes ownership of the Error, and the code
+ * only has to be non-zero because the Error carries the detail.
+ */
+static void amdvi_mig_save(AMDVIState *s)
+{
+    struct iommu_viommu_mig_header hdr = {};
+    uint32_t len = 0, status = 0;
+    Error *local_err = NULL;
+    uint8_t *blob;
+
+    if (!s->core) {
+        return;
+    }
+
+    amdvi_mig_payload_reset(s);
+
+    if (!s->mig_supported) {
+        error_setg(&local_err,
+                   "amd-viommu: the host IOMMU cannot save vIOMMU state");
+        migration_file_set_error(-ENOTSUP, local_err);
+        return;
+    }
+
+    /*
+     * Quiesce before sizing.  PREPARE_SAVE drains the guest command ring and
+     * freezes log generation, so from here the payload stops growing and the
+     * size asked for below is still the size SAVE needs.  Sizing first would
+     * race a guest that is still filling the rings.
+     */
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_PREPARE_SAVE,
+                                          AMD_VIOMMU_MIG_DRAIN_TIMEOUT_MS,
+                                          NULL, NULL, NULL, &status,
+                                          &local_err)) {
+        migration_file_set_error(-EIO, local_err);
+        return;
+    }
+    trace_amdvi_mig_prepared(s->core->viommu_id, status);
+
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_GET_SIZE, 0,
+                                          NULL, NULL, &len, NULL, &local_err)) {
+        migration_file_set_error(-EIO, local_err);
+        goto abort;
+    }
+
+    /*
+     * SAVE reports the size it needs instead of consuming the quiesce when the
+     * buffer is short, but arriving there would mean the payload grew after
+     * being frozen, so treat it as the error it is rather than retrying.
+     */
+    blob = g_malloc0(len);
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_SAVE, 0, &hdr,
+                                          blob, &len, NULL, &local_err)) {
+        migration_file_set_error(-EIO, local_err);
+        g_free(blob);
+        goto abort;
+    }
+
+    s->mig_hdr = hdr;
+    s->mig_blob = blob;
+    s->mig_blob_len = len;
+    s->mig_hdr_version = hdr.blob_format_version;
+    s->mig_hdr_payload_size = hdr.payload_size;
+    trace_amdvi_mig_saved(s->core->viommu_id, len, hdr.blob_format_version);
+    return;
+
+abort:
+    amdvi_mig_abort(s);
+}
+
 static void amd_viommu_vm_state_change(void *opaque,
                                         bool running, RunState state)
 {
@@ -378,6 +491,19 @@ static void amd_viommu_vm_state_change(void *opaque,
     switch (state) {
     case RUN_STATE_RUNNING:
         amd_viommu_state_change_running(s);
+        break;
+    case RUN_STATE_FINISH_MIGRATE:
+    case RUN_STATE_SAVE_VM:
+        /*
+         * The endpoints behind this vIOMMU are stopped before this runs, since
+         * they sort after it by handler priority, so the only DMA left to drain
+         * is what the guest already queued.
+         *
+         * savevm also passes through SAVE_VM; live migration uses
+         * FINISH_MIGRATE.  The iommufd payload is parked for VMState in
+         * amdvi_mig_save(), which the iommufd-mig subsection then serializes.
+         */
+        amdvi_mig_save(s);
         break;
     case RUN_STATE_SHUTDOWN:
         /*
@@ -1166,6 +1292,22 @@ static bool amdvi_iommufd_mig_needed(void *opaque)
 }
 
 /*
+ * Once the payload is on the wire (or in the snapshot file), drop the
+ * in-memory copy.  For savevm the source resumes, so hand the quiesced
+ * vIOMMU back to the guest; migration leaves it quiesced until shutdown.
+ */
+static int amdvi_iommufd_mig_post_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    if (runstate_check(RUN_STATE_SAVE_VM)) {
+        amdvi_mig_abort(s);
+    }
+    amdvi_mig_payload_reset(s);
+    return 0;
+}
+
+/*
  * Uses .post_load_errp rather than .post_load so that the reason a payload was
  * rejected travels with the failure, instead of being printed separately from
  * the error the migration ends up reporting.
@@ -1222,6 +1364,7 @@ static const VMStateDescription vmstate_amd_viommu_iommufd_mig = {
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = amdvi_iommufd_mig_needed,
+    .post_save = amdvi_iommufd_mig_post_save,
     .post_load_errp = amdvi_iommufd_mig_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(mig_hdr_version, AMDVIState),
