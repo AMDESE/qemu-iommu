@@ -508,6 +508,8 @@ struct AMDVIState {
     /* IOMMUFD alloc vIOMMU stuff */
     struct iommu_viommu_amd iommufd_viommu_amd;
     IOMMUFDViommu *core;
+    /* Host IOMMU can save and restore the state of the vIOMMU in @core */
+    bool mig_supported;
     MemoryRegion mr_vf_mmio;       /* 3st 4K for HW-vIOMMU (VF MMIO) */
     MemoryRegion mr_vf_ctrl_mmio;  /* 1st 4K for HW-vIOMMU (VF CTRL MMIO) */
     void *vf_mmio_page;           /* MMIO mmap pointer */
