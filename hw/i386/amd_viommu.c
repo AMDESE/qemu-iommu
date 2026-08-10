@@ -380,12 +380,25 @@ static void vdev_alloc_all(AMDVIState *s)
 
 static void amdvi_mig_restore(AMDVIState *s);
 static void amdvi_mig_payload_reset(AMDVIState *s);
+static void amdvi_mig_restore_failed(AMDVIState *s, Error *err);
+static bool amdvi_devtab_restore(AMDVIState *s, Error **errp);
 
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
     struct AMDVI_dte_key *key;
     AMDIOMMUFDDevice *amd_idev;
+    Error *local_err = NULL;
     GHashTableIter it;
+
+    /*
+     * Before the devices, because a restored guest never re-issues the
+     * register write that would otherwise build the table, and the DTEs it
+     * holds have to be readable the moment the guest runs again.
+     */
+    if (!amdvi_devtab_restore(s, &local_err)) {
+        amdvi_mig_restore_failed(s, local_err);
+        return;
+    }
 
     g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
 
@@ -1112,9 +1125,22 @@ static void cleanup_devtab(AMDVIState *s)
     s->devtab_base = 0;
     s->devtab_len = 0;
     s->devtab_size = 0;
+
+    /* A table being torn down leaves any parked migration copy of it stale. */
+    g_free(s->devtab_mig);
+    s->devtab_mig = NULL;
+    s->devtab_mig_len = 0;
 }
 
-static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
+/*
+ * Build the device table shadow and its IO region from AMDVI_MMIO_DEVICE_TABLE.
+ *
+ * Split out of the register write handler so the restore path can share it: a
+ * migrated guest programmed that register on the source and never writes it
+ * again, but the register itself crosses in mmior[], so the destination can
+ * derive the same base, size and length from it rather than carrying them.
+ */
+static void amdvi_devtab_setup(AMDVIState *s)
 {
     char name[30];
     uint64_t offset, req_size;
@@ -1163,6 +1189,63 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
      */
     memory_region_init_io(&s->devtab_mr, OBJECT(s), &dte_ops, s, name, s->devtab_len);
     memory_region_add_subregion_overlap(get_system_memory(), offset, &s->devtab_mr, 1);
+}
+
+static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
+{
+    amdvi_devtab_setup(s);
+}
+
+/*
+ * Rebuild the device table on the destination and refill it with the contents
+ * the source had.
+ *
+ * The table is an IO region over a heap buffer rather than guest RAM, so
+ * nothing else in the migration stream carries it, and the guest can read back
+ * DTEs it wrote for devices that were never assigned.
+ */
+static bool amdvi_devtab_restore(AMDVIState *s, Error **errp)
+{
+    /* Taken before the setup below, which frees whatever is parked. */
+    g_autofree uint8_t *contents = NULL;
+    uint32_t len = s->devtab_mig_len;
+
+    /*
+     * Keyed on the flag rather than on the parked table itself, because saving
+     * leaves one parked on the source too, and a source resuming from a failed
+     * migration must not rebuild the table it is already running on.
+     */
+    if (!s->devtab_restore_pending) {
+        return true;
+    }
+    s->devtab_restore_pending = false;
+
+    contents = g_steal_pointer(&s->devtab_mig);
+    s->devtab_mig_len = 0;
+
+    if (!contents) {
+        error_setg(errp, "amd-viommu: migrated device table is missing");
+        return false;
+    }
+
+    amdvi_devtab_setup(s);
+
+    /*
+     * Both lengths come from the bus range this IOMMU serves, so a mismatch
+     * means source and destination were given different PCI topologies and the
+     * DTEs would land at the wrong devids.
+     */
+    if (s->devtab_len != len) {
+        error_setg(errp, "amd-viommu: migrated device table is %u bytes but "
+                   "this host's bus range needs %" PRIu64, len, s->devtab_len);
+        return false;
+    }
+
+    memcpy(s->devtab, contents, len);
+
+    trace_amdvi_mig_devtab_restored(s->devtab_base, s->devtab_len);
+
+    return true;
 }
 
 static inline void amdvi_handle_control_write(AMDVIState *s)
@@ -1705,6 +1788,68 @@ static const VMStateDescription vmstate_amd_viommu_iommufd_mig = {
     }
 };
 
+static bool amdvi_devtab_needed(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    return s->devtab && s->devtab_len;
+}
+
+static int amdvi_devtab_pre_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    g_free(s->devtab_mig);
+    s->devtab_mig = g_memdup2(s->devtab, s->devtab_len);
+    s->devtab_mig_len = s->devtab_len;
+
+    return 0;
+}
+
+static int amdvi_devtab_post_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    /* The source has no use for its own snapshot once it is on the wire. */
+    g_free(s->devtab_mig);
+    s->devtab_mig = NULL;
+    s->devtab_mig_len = 0;
+
+    return 0;
+}
+
+/*
+ * The table cannot be applied from here: rebuilding it installs a memory
+ * region, and the geometry it is rebuilt from comes from mmior[], which the
+ * parent descriptor is still in the middle of loading.
+ */
+static int amdvi_devtab_post_load(void *opaque, int version_id)
+{
+    AMDVIState *s = opaque;
+
+    s->devtab_restore_pending = true;
+
+    return 0;
+}
+
+/* The amd-viommu/ prefix is required for the same reason as above. */
+static const VMStateDescription vmstate_amd_viommu_devtab = {
+    .name = "amd-viommu/devtab",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = amdvi_devtab_needed,
+    .pre_save = amdvi_devtab_pre_save,
+    .post_save = amdvi_devtab_post_save,
+    .post_load = amdvi_devtab_post_load,
+    .fields = (const VMStateField[]) {
+        /* Sizes @devtab_mig's allocation on load, so it has to precede it. */
+        VMSTATE_UINT32(devtab_mig_len, AMDVIState),
+        VMSTATE_VBUFFER_ALLOC_UINT32(devtab_mig, AMDVIState, 0, NULL,
+                                     devtab_mig_len),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_amd_viommu = {
     .name = "amd-viommu",
     /*
@@ -1730,6 +1875,7 @@ static const VMStateDescription vmstate_amd_viommu = {
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
+        &vmstate_amd_viommu_devtab,
         &vmstate_amd_viommu_iommufd_mig,
         NULL
     }

@@ -416,6 +416,15 @@ struct AMDVIState {
     uint64_t devtab_len;         /* device table length          */
     MemoryRegion devtab_mr;      /* device table region          */
 
+    /*
+     * The migrated contents of @devtab, parked here on load rather than read
+     * into @devtab directly, because the destination reallocates that buffer
+     * when it rebuilds the table's geometry from the restored registers.
+     */
+    uint8_t *devtab_mig;
+    uint32_t devtab_mig_len;
+    bool devtab_restore_pending; /* a load parked a table to be applied */
+
     struct AMDVI_dte_info dte_info[AMDVI_DEVID_MAX];
 
     struct IOMMUFDHWqueue *cmdbuf_hwq;
