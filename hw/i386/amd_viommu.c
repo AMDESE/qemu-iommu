@@ -455,6 +455,11 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
     migrate_del_blocker(&s->mig_blocker);
     amdvi_mig_payload_reset(s);
 
+    if (s->mig_fail_bh) {
+        qemu_bh_delete(s->mig_fail_bh);
+        s->mig_fail_bh = NULL;
+    }
+
     amdvi_free_pprlog_hwq(s);
     amdvi_free_evtlog_hwq(s);
     amdvi_free_cmdbuf_hwq(s);
@@ -615,16 +620,40 @@ abort:
     amdvi_mig_abort(s);
 }
 
+static void amdvi_mig_restore_failed_bh(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    qemu_bh_delete(s->mig_fail_bh);
+    s->mig_fail_bh = NULL;
+    vm_stop(RUN_STATE_INTERNAL_ERROR);
+}
+
+/*
+ * Stop the guest rather than let it run against a vIOMMU that was never
+ * restored.  Failing the migration is not available here: this runs from the
+ * RUN_STATE_RUNNING notifier, which process_incoming_migration_bh() reaches
+ * only after it is committed to running the guest on this host, and the
+ * incoming migration is marked complete immediately afterwards.
+ *
+ * The stop is deferred to a bottom half because vm_start() resumes the vCPUs
+ * unconditionally once the notifier chain returns, so stopping from inside it
+ * would simply be undone on the way out.
+ */
+static void amdvi_mig_restore_failed(AMDVIState *s, Error *err)
+{
+    error_reportf_err(err, "amd-viommu: stopping the guest: ");
+
+    if (!s->mig_fail_bh) {
+        s->mig_fail_bh = qemu_bh_new(amdvi_mig_restore_failed_bh, s);
+    }
+    qemu_bh_schedule(s->mig_fail_bh);
+}
+
 /*
  * Apply a payload that arrived in VMState, once the vIOMMU it belongs to has
  * been allocated.  Every kernel operation unwinds itself on failure, so there
  * is no abort to issue here.
- *
- * FIXME: a failure cannot fail the incoming migration.  On the destination
- * there is no outgoing stream to set an error on, so this only reports, and the
- * guest would go on to run against a vIOMMU that was never restored.  The
- * VMState hook that could refuse cleanly runs too early to be used, since the
- * vIOMMU does not exist yet, which is the reason the work is here at all.
  */
 static void amdvi_mig_restore(AMDVIState *s)
 {
@@ -644,14 +673,14 @@ static void amdvi_mig_restore(AMDVIState *s)
     if (!s->core) {
         error_setg(&local_err, "amd-viommu: migrated vIOMMU state arrived but "
                    "no vIOMMU was allocated to restore it onto");
-        migration_file_set_error(-EINVAL, local_err);
+        amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
 
     if (!s->mig_supported) {
         error_setg(&local_err,
                    "amd-viommu: the host IOMMU cannot restore vIOMMU state");
-        migration_file_set_error(-ENOTSUP, local_err);
+        amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
 
@@ -660,7 +689,7 @@ static void amdvi_mig_restore(AMDVIState *s)
                                           IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
                                           &s->mig_hdr, s->mig_blob, &len, NULL,
                                           &local_err)) {
-        migration_file_set_error(-EIO, local_err);
+        amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
 
@@ -672,7 +701,7 @@ static void amdvi_mig_restore(AMDVIState *s)
                                           IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE,
                                           0, NULL, NULL, NULL, NULL,
                                           &local_err)) {
-        migration_file_set_error(-EIO, local_err);
+        amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
 
