@@ -414,6 +414,54 @@ bool iommufd_backend_get_device_info(IOMMUFDBackend *be, uint32_t devid,
     return true;
 }
 
+/*
+ * Drive one step of a vIOMMU's migration state machine. @data_len is in/out:
+ * on the way in it says how much room @data has, and on the way back how much
+ * the kernel needs (GET_SIZE) or wrote (SAVE). Operations that carry neither a
+ * header nor a payload pass NULL for both.
+ *
+ * @hdr_len works the same way, but the kernel's answer is only interesting to a
+ * caller that wants to negotiate, and the header is fixed size by ABI, so it is
+ * kept internal here.
+ */
+bool iommufd_backend_viommu_mig_state(IOMMUFDBackend *be, uint32_t viommu_id,
+                                      uint32_t op, uint32_t timeout_ms,
+                                      struct iommu_viommu_mig_header *hdr,
+                                      void *data, uint32_t *data_len,
+                                      uint32_t *out_status, Error **errp)
+{
+    int ret, fd = be->fd;
+    struct iommu_viommu_mig_state mig = {
+        .size = sizeof(mig),
+        .viommu_id = viommu_id,
+        .op = op,
+        .timeout_ms = timeout_ms,
+        .data_len = data_len ? *data_len : 0,
+        .data_uptr = (uintptr_t)data,
+        .hdr_uptr = (uintptr_t)hdr,
+        .hdr_len = hdr ? sizeof(*hdr) : 0,
+    };
+
+    ret = ioctl(fd, IOMMU_VIOMMU_MIG_STATE, &mig);
+    trace_iommufd_backend_viommu_mig_state(fd, viommu_id, op, mig.data_len,
+                                           mig.out_status, ret);
+    if (ret) {
+        error_setg_errno(errp, errno,
+                         "Failed vIOMMU migration operation %u on vIOMMU %u",
+                         op, viommu_id);
+        return false;
+    }
+
+    if (data_len) {
+        *data_len = mig.data_len;
+    }
+    if (out_status) {
+        *out_status = mig.out_status;
+    }
+
+    return true;
+}
+
 bool iommufd_backend_invalidate_cache(IOMMUFDBackend *be, uint32_t id,
                                       uint32_t data_type, uint32_t entry_len,
                                       uint32_t *entry_num, void *data,
