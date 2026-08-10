@@ -1238,8 +1238,26 @@ static const VMStateDescription vmstate_amd_viommu_iommufd_mig = {
 
 static const VMStateDescription vmstate_amd_viommu = {
     .name = "amd-viommu",
+    /*
+     * Version 1 rather than 0 on purpose.  A QEMU predating this work sets only
+     * .name and .unmigratable, so its implicit version is 0 and an incoming
+     * stream at version 1 trips its version check.  That check is the only
+     * thing protecting that direction, since .unmigratable is consulted when
+     * saving and not when loading.
+     */
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .priority = MIG_PRI_IOMMU,
     .unmigratable = 1,
     .fields = (const VMStateField[]) {
+        /*
+         * The whole register file, not the 0x0-0x1FFF the guest usually
+         * touches: the high half holds the counter and event registers, and a
+         * destination that zeroed them would disagree with a guest that had
+         * read them.  w1cmask[] and romask[] stay out because amdvi_init()
+         * rebuilds them from the device model rather than from guest state.
+         */
+        VMSTATE_UINT8_ARRAY(mmior, AMDVIState, AMDVI_MMIO_SIZE),
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
