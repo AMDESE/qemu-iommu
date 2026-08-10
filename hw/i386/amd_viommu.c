@@ -136,7 +136,6 @@ struct AMDVI_dte_key {
     uint8_t devfn;
 };
 
-
 static void amdvi_alloc_passthrough_hwpt(AMDIOMMUFDDevice *dev, AMDVIState *s)
 {
 
@@ -382,6 +381,11 @@ static void amdvi_mig_restore(AMDVIState *s);
 static void amdvi_mig_payload_reset(AMDVIState *s);
 static void amdvi_mig_restore_failed(AMDVIState *s, Error *err);
 static bool amdvi_devtab_restore(AMDVIState *s, Error **errp);
+static AMDIOMMUFDDevice *amd_viommu_get_device_from_bdf(AMDVIState *s,
+                                                        uint16_t bus,
+                                                        uint16_t devfn);
+static int amd_viommu_update_gcr3(AMDVIState *s, AMDIOMMUFDDevice *dev,
+                                  uint16_t dev_id, uint64_t *dte);
 
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
@@ -424,6 +428,19 @@ static void amd_viommu_state_change_running(AMDVIState *s)
 
     /* The vIOMMU exists only after the loop above, so restore comes last. */
     amdvi_mig_restore(s);
+
+    /*
+     * The nested domains are rebuilt from inside that restore, because they
+     * have to land before COMMIT_RESTORE.  A stream carrying device records
+     * therefore has to carry the vIOMMU payload as well, which the same save
+     * always produces; catch it here rather than resume a guest whose devices
+     * were quietly left without their domains.
+     */
+    if (s->dev_replay_pending) {
+        error_setg(&local_err, "amd-viommu: migrated device records arrived "
+                   "without the vIOMMU state they have to be replayed with");
+        amdvi_mig_restore_failed(s, local_err);
+    }
 }
 
 static void amdvi_free_cmdbuf_hwq(AMDVIState *s)
@@ -718,6 +735,64 @@ static int amdvi_mig_replay_hw_queues(AMDVIState *s, Error **errp)
     return 0;
 }
 
+/*
+ * Rebuild the nested domains the source had, one per assigned device.
+ *
+ * This calls amd_viommu_update_gcr3() rather than driving the DTE write
+ * handler, whose allocation only fires when the guest writes DTE[0] and DTE[1]
+ * adjacently.  A restored guest issues no such write, and the handler would
+ * also have to be fed a write sequence that never happened.
+ *
+ * dte_info is then seeded with what each domain was built from, so that the
+ * guest's next write to a DTE it has not changed is recognised as a no-op
+ * instead of allocating the domain a second time.
+ */
+static bool amdvi_dev_replay_nested(AMDVIState *s, Error **errp)
+{
+    g_autofree AMDVI_dev_replay *records = NULL;
+    int32_t count = s->dev_replay_count;
+    int32_t i;
+
+    if (!s->dev_replay_pending) {
+        return true;
+    }
+    s->dev_replay_pending = false;
+
+    records = g_steal_pointer(&s->dev_replay);
+    s->dev_replay_count = 0;
+
+    for (i = 0; i < count; i++) {
+        AMDVI_dev_replay *rec = &records[i];
+        AMDVI_dte_info *info = &s->dte_info[rec->devid];
+        AMDIOMMUFDDevice *dev;
+
+        if (rec->had_nested) {
+            dev = amd_viommu_get_device_from_bdf(s, rec->devid >> 8,
+                                                 rec->devid & 0xFF);
+            if (!dev) {
+                error_setg(errp, "amd-viommu: device %04x lost between load "
+                           "and restore", rec->devid);
+                return false;
+            }
+
+            if (amd_viommu_update_gcr3(s, dev, rec->devid, rec->dte)) {
+                error_setg(errp, "amd-viommu: failed to rebuild the nested "
+                           "domain for device %04x", rec->devid);
+                return false;
+            }
+        }
+
+        info->dte0 = rec->dte[0];
+        info->dte1 = rec->dte[1];
+        info->last = rec->last;
+        info->curr = rec->curr;
+    }
+
+    trace_amdvi_mig_replayed_nested(count);
+
+    return true;
+}
+
 static void amdvi_mig_restore(AMDVIState *s)
 {
     Error *local_err = NULL;
@@ -757,6 +832,15 @@ static void amdvi_mig_restore(AMDVIState *s)
                                           IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
                                           &s->mig_hdr, s->mig_blob, &len, NULL,
                                           &local_err)) {
+        amdvi_mig_restore_failed(s, local_err);
+        goto out;
+    }
+
+    /*
+     * Before COMMIT_RESTORE so the flush it performs walks a gdomid_array that
+     * the rebuilt nested domains have already populated.
+     */
+    if (!amdvi_dev_replay_nested(s, &local_err)) {
         amdvi_mig_restore_failed(s, local_err);
         goto out;
     }
@@ -1884,6 +1968,134 @@ static int amdvi_devtab_post_load(void *opaque, int version_id)
     return 0;
 }
 
+static bool amdvi_dev_replay_needed(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    /*
+     * Checked before pre_save builds the records, so it asks whether there are
+     * any devices to describe rather than how many records there are.
+     */
+    return g_hash_table_size(s->amd_iommufd_dev_hash) > 0;
+}
+
+static int amdvi_dev_replay_pre_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+    AMDIOMMUFDDevice *amd_idev;
+    struct AMDVI_dte_key *key;
+    GHashTableIter it;
+    int32_t i = 0;
+
+    g_free(s->dev_replay);
+    s->dev_replay_count = g_hash_table_size(s->amd_iommufd_dev_hash);
+    s->dev_replay = g_new0(AMDVI_dev_replay, s->dev_replay_count);
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        uint32_t devid = (pci_bus_num(key->bus) << 8) | key->devfn;
+        AMDVI_dev_replay *rec = &s->dev_replay[i++];
+        AMDVI_dte_info *info = &s->dte_info[devid];
+
+        /* The table starts at the primary bus, so devid is not its index. */
+        uint64_t off = (devid - (pci_bus_num(s->root_bus) << 8)) << 5;
+
+        rec->devid = devid;
+        rec->had_nested = amd_idev->v2_hwpt_id != 0;
+        rec->dte[0] = info->dte0;
+        rec->dte[1] = info->dte1;
+        rec->last = info->last;
+        rec->curr = info->curr;
+
+        /*
+         * Only DTE[0] and DTE[1] are tracked as the domain's inputs, so the
+         * other two come from the table, which crosses alongside these records.
+         * A guest that never programmed a table has no nested domain either,
+         * so leaving them zero costs nothing.
+         */
+        if (s->devtab && off + 0x20 <= s->devtab_len) {
+            rec->dte[2] = ldq_le_p(&s->devtab[off + 0x10]);
+            rec->dte[3] = ldq_le_p(&s->devtab[off + 0x18]);
+        }
+    }
+
+    return 0;
+}
+
+static int amdvi_dev_replay_post_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    g_free(s->dev_replay);
+    s->dev_replay = NULL;
+    s->dev_replay_count = 0;
+
+    return 0;
+}
+
+/*
+ * Rejected here rather than at replay time, because a record naming a device
+ * this destination was not given means the two sides were configured
+ * differently and the guest would come up with a device it cannot drive.
+ */
+static bool amdvi_dev_replay_post_load(void *opaque, int version_id,
+                                       Error **errp)
+{
+    AMDVIState *s = opaque;
+    int32_t i;
+
+    for (i = 0; i < s->dev_replay_count; i++) {
+        AMDVI_dev_replay *rec = &s->dev_replay[i];
+
+        if (!amd_viommu_get_device_from_bdf(s, rec->devid >> 8,
+                                            rec->devid & 0xFF)) {
+            error_setg(errp, "amd-viommu: migrated device %02x:%02x.%x is not "
+                       "assigned on this host", rec->devid >> 8,
+                       PCI_SLOT(rec->devid & 0xFF),
+                       PCI_FUNC(rec->devid & 0xFF));
+            return false;
+        }
+    }
+
+    s->dev_replay_pending = true;
+
+    return true;
+}
+
+static const VMStateDescription vmstate_amd_viommu_dev_replay_entry = {
+    .name = "amd-viommu/dev-replay/entry",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(devid, AMDVI_dev_replay),
+        VMSTATE_BOOL(had_nested, AMDVI_dev_replay),
+        VMSTATE_UINT64_ARRAY(dte, AMDVI_dev_replay, 4),
+        VMSTATE_INT32(last, AMDVI_dev_replay),
+        VMSTATE_INT32(curr, AMDVI_dev_replay),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+/* The amd-viommu/ prefix is required for the same reason as above. */
+static const VMStateDescription vmstate_amd_viommu_dev_replay = {
+    .name = "amd-viommu/dev-replay",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = amdvi_dev_replay_needed,
+    .pre_save = amdvi_dev_replay_pre_save,
+    .post_save = amdvi_dev_replay_post_save,
+    .post_load_errp = amdvi_dev_replay_post_load,
+    .fields = (const VMStateField[]) {
+        /* Sizes the array's allocation on load, so it has to precede it. */
+        VMSTATE_INT32(dev_replay_count, AMDVIState),
+        VMSTATE_STRUCT_VARRAY_ALLOC(dev_replay, AMDVIState, dev_replay_count, 0,
+                                    vmstate_amd_viommu_dev_replay_entry,
+                                    AMDVI_dev_replay),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 /* The amd-viommu/ prefix is required for the same reason as above. */
 static const VMStateDescription vmstate_amd_viommu_devtab = {
     .name = "amd-viommu/devtab",
@@ -1930,6 +2142,7 @@ static const VMStateDescription vmstate_amd_viommu = {
         /* First, so that a payload is never applied to the wrong instance. */
         &vmstate_amd_viommu_identity,
         &vmstate_amd_viommu_devtab,
+        &vmstate_amd_viommu_dev_replay,
         &vmstate_amd_viommu_iommufd_mig,
         NULL
     }

@@ -396,6 +396,25 @@ struct AMDVI_dte_info {
 
 typedef struct AMDVI_dte_info AMDVI_dte_info;
 
+/*
+ * What the destination needs to rebuild one assigned device's nested domain.
+ *
+ * The DTE words are the ones the source built the domain from rather than
+ * whatever the device table holds now, so a guest that rewrote part of a DTE
+ * after the allocation cannot make the destination build a different domain
+ * from the same starting point.
+ */
+struct AMDVI_dev_replay {
+    uint32_t devid;
+    bool had_nested;
+    uint64_t dte[4];
+    /* dte_info's write tracking, so a part-written DTE resumes correctly */
+    int32_t last;
+    int32_t curr;
+};
+
+typedef struct AMDVI_dev_replay AMDVI_dev_replay;
+
 struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
     AMDVIPCIState *pci;         /* IOMMU PCI device             */
@@ -426,6 +445,16 @@ struct AMDVIState {
     bool devtab_restore_pending; /* a load parked a table to be applied */
 
     struct AMDVI_dte_info dte_info[AMDVI_DEVID_MAX];
+
+    /*
+     * The nested domains to rebuild on the destination, one record per assigned
+     * device.  Carried explicitly rather than inferred from V=1 in the restored
+     * device table, which describes what the guest programmed and not what the
+     * source actually allocated.
+     */
+    AMDVI_dev_replay *dev_replay;
+    int32_t dev_replay_count;
+    bool dev_replay_pending;     /* a load parked records to be applied */
 
     struct IOMMUFDHWqueue *cmdbuf_hwq;
     /* Last (addr, len, flags) passed to IOMMU_HW_QUEUE_ALLOC for cmdbuf */
