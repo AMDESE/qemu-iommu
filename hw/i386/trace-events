@@ -121,6 +121,8 @@ amdvi_ir_irte_ga_val(uint64_t hi, uint64_t lo) "hi 0x%"PRIx64" lo 0x%"PRIx64
 
 # amd_viommu.c
 amdvi_viommu_mig_supported(uint32_t devid, bool supported) "devid %"PRIu32" migration supported %d"
+amdvi_mig_prepared(uint32_t viommu_id, uint32_t status) "viommu_id %"PRIu32" out_status 0x%"PRIx32
+amdvi_mig_saved(uint32_t viommu_id, uint32_t len, uint32_t version) "viommu_id %"PRIu32" payload %"PRIu32" bytes, format version %"PRIu32
 
 # vmport.c
 vmport_register(unsigned char command, void *func, void *opaque) "command: 0x%02x func: %p opaque: %p"
