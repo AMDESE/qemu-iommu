@@ -414,8 +414,17 @@ bool vfio_device_is_mdev(VFIODevice *vbasedev)
 
 bool vfio_device_dirty_pages_disabled(VFIODevice *vbasedev)
 {
+    /*
+     * A device behind a nesting vIOMMU issues DMA with guest IOVAs, which the
+     * hardware translates through the guest's own tables. The ranges handed to
+     * the device tracker, and the addresses those reports are applied to, come
+     * from the container's address space and are guest physical, so the two
+     * describe different pages and the dirty set would be wrong. Leave dirty
+     * tracking to the IOMMU, which sees the stage-2 addresses QEMU migrates.
+     */
     return (!vbasedev->dirty_pages_supported ||
-            vbasedev->device_dirty_page_tracking == ON_OFF_AUTO_OFF);
+            vbasedev->device_dirty_page_tracking == ON_OFF_AUTO_OFF ||
+            vfio_device_get_viommu_flags_want_nesting(vbasedev));
 }
 
 bool vfio_device_hiod_create_and_realize(VFIODevice *vbasedev,
