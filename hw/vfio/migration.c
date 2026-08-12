@@ -1010,6 +1010,18 @@ static int vfio_migration_init(VFIODevice *vbasedev)
 
     vbasedev->dirty_pages_supported = vfio_dma_logging_supported(vbasedev);
 
+    /*
+     * Said once here rather than from vfio_device_dirty_pages_disabled(),
+     * which is consulted on every dirty tracking decision.
+     */
+    if (vbasedev->dirty_pages_supported &&
+        vbasedev->device_dirty_page_tracking != ON_OFF_AUTO_OFF &&
+        vfio_device_get_viommu_flags_want_nesting(vbasedev)) {
+        warn_report("%s: device dirty page tracking is unusable behind a "
+                    "nesting vIOMMU, falling back to IOMMU dirty tracking",
+                    vbasedev->name);
+    }
+
     oid = vmstate_if_get_id(VMSTATE_IF(DEVICE(obj)));
     if (oid) {
         path = g_strdup_printf("%s/vfio", oid);
