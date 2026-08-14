@@ -2165,7 +2165,6 @@ static const VMStateDescription vmstate_amd_viommu = {
     .version_id = 1,
     .minimum_version_id = 1,
     .priority = MIG_PRI_IOMMU,
-    .unmigratable = 1,
     .fields = (const VMStateField[]) {
         /*
          * The whole register file, not the 0x0-0x1FFF the guest usually
