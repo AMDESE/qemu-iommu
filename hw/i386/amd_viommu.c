@@ -1686,6 +1686,58 @@ static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
             AMDVI_MAX_PH_ADDR | AMDVI_MAX_GVA_ADDR | AMDVI_MAX_VA_ADDR);
 }
 
+/*
+ * An instance is identified by the bus range it serves rather than by
+ * x86_iommu->index, which is handed out from a counter in realize order and
+ * says nothing a user configured.  The range is what makes two instances
+ * different from each other, and it is what sizes the guest device table, so
+ * comparing it also catches a destination whose last-bus-nr simply disagrees
+ * with the source's.
+ */
+static int amdvi_identity_pre_save(void *opaque)
+{
+    AMDVIState *s = opaque;
+
+    s->mig_first_bus_nr = pci_bus_num(s->root_bus);
+    s->mig_last_bus_nr = s->last_bus_nr;
+
+    return 0;
+}
+
+static bool amdvi_identity_post_load(void *opaque, int version_id, Error **errp)
+{
+    AMDVIState *s = opaque;
+
+    if (s->mig_first_bus_nr != pci_bus_num(s->root_bus) ||
+        s->mig_last_bus_nr != s->last_bus_nr) {
+        error_setg(errp, "amd-viommu: migrated vIOMMU serves buses %02x-%02x "
+                   "but this one serves %02x-%02x", s->mig_first_bus_nr,
+                   s->mig_last_bus_nr, pci_bus_num(s->root_bus),
+                   s->last_bus_nr);
+        return false;
+    }
+
+    return true;
+}
+
+/*
+ * Carried by every instance, including the only one of a single-vIOMMU guest:
+ * a destination that disagrees about the bus range is worth refusing however
+ * many vIOMMUs are present, and the range is the whole of what travels.
+ */
+static const VMStateDescription vmstate_amd_viommu_identity = {
+    .name = "amd-viommu/identity",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = amdvi_identity_pre_save,
+    .post_load_errp = amdvi_identity_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(mig_first_bus_nr, AMDVIState),
+        VMSTATE_UINT32(mig_last_bus_nr, AMDVIState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 /* Nothing to carry when the kernel gave us no payload to hand back. */
 static bool amdvi_iommufd_mig_needed(void *opaque)
 {
@@ -1875,6 +1927,8 @@ static const VMStateDescription vmstate_amd_viommu = {
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
+        /* First, so that a payload is never applied to the wrong instance. */
+        &vmstate_amd_viommu_identity,
         &vmstate_amd_viommu_devtab,
         &vmstate_amd_viommu_iommufd_mig,
         NULL

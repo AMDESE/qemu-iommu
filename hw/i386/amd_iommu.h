@@ -532,6 +532,13 @@ struct AMDVIState {
      * post_load to cross-check the bytes against.
      */
     struct iommu_viommu_mig_header mig_hdr;
+    /*
+     * The source's bus range, held only so that it can be compared against
+     * this instance's on load.  Never applied: last_bus_nr is a property of
+     * the destination's own command line.
+     */
+    uint32_t mig_first_bus_nr;
+    uint32_t mig_last_bus_nr;
     uint32_t mig_hdr_version;
     uint32_t mig_hdr_payload_size;
     uint8_t *mig_blob;
