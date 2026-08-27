@@ -1528,34 +1528,6 @@ static void amdvi_cmdbuf_run(AMDVIState *s)
     }
 }
 
-static inline
-const char *amdvi_mmio_get_name(hwaddr addr)
-{
-    /* Return MMIO names as string literals */
-    switch (addr) {
-#define MMIO_REG_TO_STRING(mmio_reg) case mmio_reg: return #mmio_reg
-    MMIO_REG_TO_STRING(AMDVI_MMIO_DEVICE_TABLE);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_COMMAND_BASE);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EVENT_BASE);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_CONTROL);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EXCL_BASE);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EXCL_LIMIT);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EXT_FEATURES);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_COMMAND_HEAD);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_COMMAND_TAIL);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EVENT_HEAD);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_EVENT_TAIL);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_STATUS);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_PPR_BASE);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_PPR_HEAD);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_PPR_TAIL);
-    MMIO_REG_TO_STRING(AMDVI_MMIO_XT_GEN_INTR);
-#undef MMIO_REG_TO_STRING
-    default:
-        return "UNHANDLED";
-    }
-}
-
 static uint64_t amdvi_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
     AMDVIState *s = opaque;
