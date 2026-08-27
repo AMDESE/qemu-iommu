@@ -61,6 +61,16 @@ void physical_memory_read(hwaddr addr, void *buf, hwaddr len);
  */
 void physical_memory_write(hwaddr addr, const void *buf, hwaddr len);
 
+/**
+ * physical_memory_is_ram: Tell whether an address maps to a RAM region.
+ *
+ * Translates @phys_addr in the legacy global #address_space_memory address
+ * space and reports whether it resolves to a RAM #MemoryRegion.
+ *
+ * @phys_addr: address within the legacy global address space
+ */
+bool physical_memory_is_ram(hwaddr phys_addr);
+
 #define DIRTY_CLIENTS_ALL     ((1 << DIRTY_MEMORY_NUM) - 1)
 #define DIRTY_CLIENTS_NOCODE  (DIRTY_CLIENTS_ALL & ~(1 << DIRTY_MEMORY_CODE))
 
