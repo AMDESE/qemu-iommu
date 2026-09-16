@@ -1,0 +1,74 @@
+CHANGELOG
+
+UAPI Change Summary
+
+Existing iommufd UAPI (already in QEMU 11.1 / Linux iommufd.h):
+
+- IOMMU_GET_HW_INFO with IOMMU_HW_INFO_TYPE_AMD /
+  struct iommu_hw_info_amd (EFR, EFR2). Used to seed guest MMIO
+  capabilities.
+
+- IOMMU_HWPT_ALLOC with IOMMU_HWPT_ALLOC_NEST_PARENT (VFIO nesting
+  parent) and IOMMU_HWPT_DATA_AMD_GUEST / struct iommu_hwpt_amd_guest
+  (guest DTE) for nested and passthrough domains.
+
+- IOMMU_VIOMMU_ALLOC and IOMMU_VDEVICE_ALLOC. vDEVICE virt_id is the
+  guest DeviceID. Type-specific vIOMMU data is used to return the
+  VF-MMIO mmap offset.
+
+- IOMMU_HW_QUEUE_ALLOC and IOMMU_DESTROY. Queue GPA is
+  nesting_parent_iova; length is the decoded guest queue size.
+
+New / extended iommufd UAPI in this tree:
+
+- IOMMU_VIOMMU_TYPE_AMD and struct iommu_viommu_amd
+  { out_vfmmio_mmap_offset } on IOMMU_VIOMMU_ALLOC.
+
+- IOMMU_IOAS_NOIOMMU_GET_PA (ioctl 0x95): IOVA-to-PA query for
+  noiommu unsafe DMA. Not used by amd-viommu; present so ioctl
+  numbers match Linux 7.3-rcX.
+
+- IOMMU_VIOMMU_EXT_INT_REMAP (ioctl 0x96): program event/PPR log
+  Extended-IRT delivery (kvmfd, vcpu_id, vector).
+
+- IOMMU_HW_QUEUE_TYPE_AMD_{CMD,EVT,PPR} and
+  enum iommu_hw_queue_flags_amd. IOMMU_HW_QUEUE_ALLOC @flags was
+  previously required to be 0; AMD now passes CONTROL enable bits
+  (CmdBufEn, EventLogEn, PPREn, ...).
+
+Change from https://github.com/AMDESE/qemu-iommu/tree/wip/amd-viommu_20260728
+
+- Rebased onto QEMU 11.1.50 from AMD internal branch
+  sarunkod/amd_viommu_21032026_rebase (was QEMU 10.2.50).
+
+- Split shared AMD-Vi types/macros into amd_iommu_common.{c,h}.
+
+- Switch to upstream iommufd backend helpers (alloc_viommu/vdev/hw_queue
+  and viommu mmap). Drop local IOMMUFDDevice / IOMMUFDViommu wrappers.
+
+- Use memory_region_set_skip_iommu_map() for VF MMIO instead of
+  skip_vfio_dma.
+
+- Allocate the iommufd vIOMMU when the VM starts running, and seed
+  guest EFR/MMIO capabilities from host hwinfo.
+
+- Allocate vdevices on AMDVIEN (assigned VFIO devices only). Drop the
+  first-MMIO vdevice_setup WIP and the full PCI-bus walk.
+
+- Overlay 32-byte DTE MemoryRegions only for assigned devices. Validate
+  guest DTE writes and create nested domains from GCR3.
+
+- Use one shared passthrough nested HWPT per vIOMMU. Require assigned
+  devices to share the same physical IOMMU (sysfs check).
+
+- Allocate/free CMD/EVT/PPR HW queues from CONTROL enable/disable
+  edges. Pass decoded queue length (2^(len+4) entries) to
+  IOMMU_HW_QUEUE_ALLOC; keep the skip-realloc cache in encoded units.
+
+- Replace stderr debug prints with trace events.
+
+Dropped vs 20260728 (not carried in this rewrite):
+
+- last-bus-nr and a single bus-range DTE window
+
+- x86-iommu unrealize and RUN_STATE_SHUTDOWN teardown
