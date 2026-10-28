@@ -187,6 +187,9 @@ struct VFIOPCIDevice {
     bool defer_kvm_irq_routing;
     bool clear_parent_atomics_on_exit;
     bool skip_vsc_check;
+    bool viommu_attached;
+    uint16_t virt_pri_cap;
+    uint16_t virt_pasid_cap;
     VFIODisplay *dpy;
     Notifier irqchip_change_notifier;
     VFIOPCICPR cpr;
