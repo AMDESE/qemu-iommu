@@ -121,6 +121,21 @@ static inline uint8_t msi_pending_off(const PCIDevice* dev, bool msi64bit)
 }
 
 /*
+ * A 64-bit capability with a per-vector mask has two reserved bytes
+ * between Message Data and Mask Bits. pci_add_capability() does not
+ * clear them, so a VFIO device keeps whatever the hardware image held.
+ * Migration checks the whole capability, and that leftover differs
+ * across a function reset. The bytes are not MSI state.
+ */
+static void msi_clear_reserved(PCIDevice *dev, bool msi64bit, bool maskbit)
+{
+    if (!msi64bit || !maskbit) {
+        return;
+    }
+    pci_set_word(dev->config + msi_data_off(dev, true) + 2, 0);
+}
+
+/*
  * Special API for POWER to configure the vectors through
  * a side channel. Should never be used by devices.
  */
@@ -248,6 +263,7 @@ int msi_init(struct PCIDevice *dev, uint8_t offset,
         pci_set_long(dev->wmask + msi_mask_off(dev, msi64bit),
                      0xffffffff >> (PCI_MSI_VECTORS_MAX - nr_vectors));
     }
+    msi_clear_reserved(dev, msi64bit, msi_per_vector_mask);
 
     dev->msi_prepare_message = msi_prepare_message;
 
@@ -294,6 +310,7 @@ void msi_reset(PCIDevice *dev)
         pci_set_long(dev->config + msi_mask_off(dev, msi64bit), 0);
         pci_set_long(dev->config + msi_pending_off(dev, msi64bit), 0);
     }
+    msi_clear_reserved(dev, msi64bit, !!(flags & PCI_MSI_FLAGS_MASKBIT));
     MSI_DEV_PRINTF(dev, "reset\n");
 }
 
