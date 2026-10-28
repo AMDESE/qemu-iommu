@@ -93,38 +93,6 @@ struct AMDVI_dte_key {
 };
 
 
-static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
-{
-    AMDIOMMUFDDevice *amd_idev = (AMDIOMMUFDDevice *)opaque;
-    HostIOMMUDeviceIOMMUFD *idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
-    uint16_t rid = pci_requester_id(b->parent_dev);
-    struct AMDVI_dte_key key = {
-        .bus = b,
-        .devfn = d->devfn,
-    };
-
-    if (!g_hash_table_lookup(amd_idev->iommu_state->amd_iommufd_dev_hash,
-                             &key)) {
-        return;
-    }
-
-    if (object_dynamic_cast(OBJECT(b->parent_dev), TYPE_PCI_BRIDGE))
-        rid += 0x100;
-
-    rid = PCI_BUILD_BDF(pci_bus_num(b), d->devfn);
-
-    amd_idev->core = iommufd_backend_alloc_vdev(idev, amd_idev->iommu_state->core, rid);
-    if (!amd_idev->core) {
-        error_report("failed to allocate a vDEVICE");
-    }
-}
-
-static void *amdvi_walk_bus_setup(PCIBus *b, void *opaque)
-{
-    pci_for_each_device_under_bus(b, amdvi_alloc_vdev, opaque);
-    return opaque;
-}
-
 static void amdvi_alloc_passthrough_hwpt(AMDIOMMUFDDevice *dev, AMDVIState *s)
 {
 
@@ -214,17 +182,54 @@ static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev
     }
 }
 
-static void vdev_alloc_all(AMDVIState *s) {
+/*
+ * Allocate the iommufd vDEVICE for every device behind this vIOMMU.  A vDEVICE
+ * binds one host device to the guest RID the guest addresses it by, so the two
+ * have to come from the same device: the hash key supplies both.
+ *
+ * This depends on guest-assigned PCI bus numbers, because the virtual RID comes
+ * from pci_bus_num(), which for any non-root bus reads PCI_SECONDARY_BUS out of
+ * the parent bridge's config space.  That byte is zero until the guest
+ * enumerates the bus, so this must not run before guest enumeration or every
+ * device behind a bridge is given a RID on bus 0.
+ *
+ * On cold boot the guest's first MMIO access to the IOMMU serves as the
+ * "enumeration finished" signal.  A restored guest has already enumerated and
+ * may never touch those registers again, so the restore path calls this
+ * directly once PCI config space has been loaded.  Hence the guard: it must be
+ * safe to reach from either.
+ */
+static void vdev_alloc_all(AMDVIState *s)
+{
     struct AMDVI_dte_key *key;
     AMDIOMMUFDDevice *amd_idev;
     GHashTableIter it;
+
+    if (s->vdevice_setup) {
+        return;
+    }
 
     g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
 
     /* Go through each VFIO device */
     while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
-        pci_for_each_bus_depth_first(s->root_bus, amdvi_walk_bus_setup, NULL, amd_idev);
+        HostIOMMUDeviceIOMMUFD *idev =
+            HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+        uint16_t rid = PCI_BUILD_BDF(pci_bus_num(key->bus), key->devfn);
+
+        if (amd_idev->core) {
+            continue;
+        }
+
+        amd_idev->core = iommufd_backend_alloc_vdev(idev, s->core, rid);
+        if (!amd_idev->core) {
+            error_report("failed to allocate a vDEVICE for %02x:%02x.%x",
+                         pci_bus_num(key->bus), PCI_SLOT(key->devfn),
+                         PCI_FUNC(key->devfn));
+        }
     }
+
+    s->vdevice_setup = true;
 }
 
 static void amd_viommu_state_change_running(AMDVIState *s)
@@ -883,10 +888,8 @@ static void amdvi_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     AMDVIState *s = opaque;
     unsigned long offset = addr & 0x07;
 
-    if (!s->vdevice_setup) {
-	vdev_alloc_all(s);
-	s->vdevice_setup = true;
-    }
+    /* The guest has enumerated PCI by now; see vdev_alloc_all(). */
+    vdev_alloc_all(s);
 
     if (addr + size > AMDVI_MMIO_SIZE) {
         trace_amdvi_mmio_write("error: addr outside region: max ",
