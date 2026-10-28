@@ -283,14 +283,42 @@ static gint page_request_addr_cmp(gconstpointer ap, gconstpointer bp)
     return (a > b) - (a < b);
 }
 
+static MigrationPausePrepareFn migration_pause_prepare_fn;
+
+void migration_set_pause_prepare(MigrationPausePrepareFn fn)
+{
+    migration_pause_prepare_fn = fn;
+}
+
 static int migration_stop_vm(MigrationState *s, RunState state)
 {
     int ret;
+    bool locked;
 
     migration_downtime_start(s);
 
     s->vm_old_state = runstate_get();
     global_state_store();
+
+    /*
+     * A device may still need a running vCPU, for example to finish a
+     * page request. Drain that before pause_all_vcpus(). The hook
+     * takes the BQL itself around its device update and drops it while
+     * the guest runs.
+     */
+    if (migration_pause_prepare_fn) {
+        locked = bql_locked();
+        if (locked) {
+            bql_unlock();
+        }
+        ret = migration_pause_prepare_fn();
+        if (locked) {
+            bql_lock();
+        }
+        if (ret) {
+            return ret;
+        }
+    }
 
     ret = vm_stop_force_state(state);
 

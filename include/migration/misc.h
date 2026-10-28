@@ -108,6 +108,15 @@ void migration_add_notifier_modes(NotifierWithReturn *notify,
  */
 void migration_remove_notifier(NotifierWithReturn *notify);
 
+/*
+ * Called from migration_stop_vm() before vCPUs are paused, and without
+ * the BQL held. The hook may take the BQL around a short critical
+ * section and must drop it while the guest is expected to run.
+ * Returns 0 or a negative errno. NULL when nothing has registered.
+ */
+typedef int (*MigrationPausePrepareFn)(void);
+void migration_set_pause_prepare(MigrationPausePrepareFn fn);
+
 void migration_file_set_error(int ret, Error *err);
 
 /* True if incoming migration entered POSTCOPY_INCOMING_DISCARD */
