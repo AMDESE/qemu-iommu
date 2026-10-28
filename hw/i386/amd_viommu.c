@@ -103,8 +103,10 @@ static void amdvi_alloc_vdev(PCIBus *b, PCIDevice *d, void *opaque)
         .devfn = d->devfn,
     };
 
-    if (!g_hash_table_lookup(amd_idev->iommu_state->hiod_hash, &key))
+    if (!g_hash_table_lookup(amd_idev->iommu_state->amd_iommufd_dev_hash,
+                             &key)) {
         return;
+    }
 
     if (object_dynamic_cast(OBJECT(b->parent_dev), TYPE_PCI_BRIDGE))
         rid += 0x100;
@@ -213,7 +215,7 @@ static void amdvi_vdevice_viommu_setup(AMDVIState *s, AMDIOMMUFDDevice *amd_idev
 }
 
 static void vdev_alloc_all(AMDVIState *s) {
-    struct amd_as_key *key;
+    struct AMDVI_dte_key *key;
     AMDIOMMUFDDevice *amd_idev;
     GHashTableIter it;
 
@@ -227,7 +229,7 @@ static void vdev_alloc_all(AMDVIState *s) {
 
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
-    struct amd_as_key *key;
+    struct AMDVI_dte_key *key;
     AMDIOMMUFDDevice *amd_idev;
     GHashTableIter it;
 
@@ -272,9 +274,8 @@ static void amdvi_free_pprlog_hwq(AMDVIState *s)
 static void amd_viommu_state_change_shutdown(AMDVIState *s)
 {
     Error *errp = NULL;
-    struct amd_as_key *key;
-    HostIOMMUDevice *hiod;
-    GHashTableIter hiod_it, amd_idev_it;
+    struct AMDVI_dte_key *key;
+    GHashTableIter amd_idev_it;
     AMDIOMMUFDDevice *amd_idev;
     HostIOMMUDeviceIOMMUFD *idev;
 
@@ -287,41 +288,48 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
     amdvi_free_evtlog_hwq(s);
     amdvi_free_cmdbuf_hwq(s);
 
-    /*
-     * VFIO devices was attached to the nested parent domain.
-     * We need to attach them to the ioas id.
-     */
-     if (s->hiod_hash) {
-        g_hash_table_iter_init(&hiod_it, s->hiod_hash);
-        while (g_hash_table_iter_next(&hiod_it, (void **)&key, (void **)&hiod)) {
-            VFIODevice *vdev_detach = hiod->agent;
+    if (s->amd_iommufd_dev_hash) {
+        g_hash_table_iter_init(&amd_idev_it, s->amd_iommufd_dev_hash);
+        while (g_hash_table_iter_next(&amd_idev_it, (void **)&key,
+                                      (void **)&amd_idev)) {
+            VFIODevice *vdev_detach = amd_idev->hiod->agent;
             VFIOIOMMUFDContainer *ioc_detach =
                 VFIO_IOMMU_IOMMUFD(vdev_detach->bcontainer);
             uint32_t ioas_detach = ioc_detach->ioas_id;
 
-            idev = HOST_IOMMU_DEVICE_IOMMUFD(hiod);
-
-            if (!host_iommu_device_iommufd_attach_hwpt(idev, ioas_detach, &errp)) {
+            /*
+             * The devices were attached to the nesting parent domain, which
+             * is going away, so put them back on the container's IOAS.
+             */
+            idev = HOST_IOMMU_DEVICE_IOMMUFD(amd_idev->hiod);
+            if (!host_iommu_device_iommufd_attach_hwpt(idev, ioas_detach,
+                                                       &errp)) {
                 error_free(errp);
-                continue;
+                errp = NULL;
             }
-        }
-        //g_hash_table_destroy(s->hiod_hash);
-    }
 
-    if (s->amd_iommufd_dev_hash) {
-        g_hash_table_iter_init(&amd_idev_it, s->amd_iommufd_dev_hash);
-        while (g_hash_table_iter_next(&amd_idev_it, (void **)&key, (void **)&amd_idev)) {
             if (amd_idev->v2_hwpt_id)
                 iommufd_backend_free_id(s->iommufd, amd_idev->v2_hwpt_id);
             if (amd_idev->core && amd_idev->core->vdev_id)
                 iommufd_backend_free_id(s->iommufd, amd_idev->core->vdev_id);
             if (amd_idev->passthrough_hwpt_id)
                 iommufd_backend_free_id(s->iommufd, amd_idev->passthrough_hwpt_id);
+
+            /*
+             * Only what was allocated from the vIOMMU goes away.  The entry
+             * belongs to the hash, which frees it when the device is detached,
+             * so freeing it here would leave a dangling pointer behind and
+             * free it a second time later.
+             */
             g_free(amd_idev->core);
-            g_free(amd_idev);
+            amd_idev->core = NULL;
+            amd_idev->v2_hwpt_id = 0;
+            amd_idev->passthrough_hwpt_id = 0;
         }
     }
+
+    /* No device holds a vDEVICE any more, so the flag saying they do is stale */
+    s->vdevice_setup = false;
 
     if (s->core && s->core->viommu_id)
         iommufd_backend_free_id(s->iommufd, s->core->viommu_id);
@@ -438,16 +446,10 @@ static uint64_t amd_viommu_dte_read(void *opaque, hwaddr offset, unsigned size)
     return val;
 }
 
-struct amd_as_key {
-    PCIBus *bus;
-    uint8_t devfn;
-    uint32_t pasid;
-};
-
 static AMDIOMMUFDDevice *amd_viommu_get_device_from_bdf(AMDVIState *s, uint16_t bus, uint16_t devfn)
 {
     AMDIOMMUFDDevice *amd_idev;
-    struct amd_as_key *key;
+    struct AMDVI_dte_key *key;
     GHashTableIter as_it;
 
     g_hash_table_iter_init(&as_it, s->amd_iommufd_dev_hash);
@@ -1004,8 +1006,7 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     assert(hiod);
     assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
 
-    /* TODO: Replace this w/ amd_iommufd_dev_hash? */
-    if (g_hash_table_lookup(s->hiod_hash, &key)) {
+    if (g_hash_table_lookup(s->amd_iommufd_dev_hash, &key)) {
         error_setg(errp, "Host IOMMU device already exist");
         return false;
     }
@@ -1019,14 +1020,14 @@ static bool amd_viommu_set_iommu_device(PCIBus *bus, void *opaque, int devfn,
     new_key->bus = bus;
     new_key->devfn = devfn;
 
-    g_hash_table_insert(s->hiod_hash, new_key, hiod);
-
     amd_idev = g_malloc0(sizeof(AMDIOMMUFDDevice));
     amd_idev->iommu_state = s;
     amd_idev->hiod = hiod;
     amd_idev->v2_hwpt_id =  0;
     amd_idev->passthrough_hwpt_id = 0;
 
+    /* Held for as long as the entry is, and dropped by amd_idev_destroy(). */
+    object_ref(hiod);
     g_hash_table_insert(s->amd_iommufd_dev_hash, new_key, amd_idev);
 
     /* Use iommufd handler opened by device */
@@ -1046,11 +1047,7 @@ static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
         .devfn = devfn,
     };
 
-    if (!g_hash_table_lookup(s->hiod_hash, &key)) {
-        return;
-    }
-
-    g_hash_table_remove(s->hiod_hash, &key);
+    g_hash_table_remove(s->amd_iommufd_dev_hash, &key);
 }
 
 static AddressSpace *amd_viommu_get_address_space(PCIBus *bus, void *opaque, int devfn)
@@ -1207,28 +1204,6 @@ static void amdvi_init(AMDVIState *s)
 }
 
 
-static gboolean amd_as_equal(gconstpointer v1, gconstpointer v2)
-{
-    const struct amd_as_key *key1 = v1;
-    const struct amd_as_key *key2 = v2;
-
-    return (key1->bus == key2->bus) && (key1->devfn == key2->devfn) &&
-           (key1->pasid == key2->pasid);
-}
-
-/*
- * Note that we use pointer to PCIBus as the key, so hashing/shifting
- * based on the pointer value is intended. Note that we deal with
- * collisions through amd_as_equal().
- */
-static guint amd_as_hash(gconstpointer v)
-{
-    const struct amd_as_key *key = v;
-    guint value = (guint)(uintptr_t)key->bus;
-
-    return (guint)(value << 8 | key->devfn);
-}
-
 static guint amdvi_dte_hash(gconstpointer v)
 {
     const struct AMDVI_dte_key *key = v;
@@ -1243,6 +1218,21 @@ static gboolean amdvi_dte_equal(gconstpointer v1, gconstpointer v2)
     const struct AMDVI_dte_key *key2 = v2;
 
     return (key1->bus == key2->bus) && (key1->devfn == key2->devfn);
+}
+
+/*
+ * The hash owns the device, so removing the entry is all it takes to give up
+ * everything the device held.  The kernel objects are not freed here: they are
+ * released while the vIOMMU is being torn down, which is where the iommufd
+ * handle they were allocated from is still known to be live.
+ */
+static void amd_idev_destroy(gpointer v)
+{
+    AMDIOMMUFDDevice *amd_idev = v;
+
+    object_unref(amd_idev->hiod);
+    g_free(amd_idev->core);
+    g_free(amd_idev);
 }
 
 static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
@@ -1282,13 +1272,10 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
 
     base_addr = AMDVI_GET_BASE_ADDR(x86_iommu->index);
 
-    s->amd_iommufd_dev_hash = g_hash_table_new_full(amd_as_hash, amd_as_equal,
-                                      g_free, g_free);
-
-    s->hiod_hash = g_hash_table_new_full(amdvi_dte_hash,
-                                         amdvi_dte_equal,
-                                         g_free,
-                                         g_free);
+    s->amd_iommufd_dev_hash = g_hash_table_new_full(amdvi_dte_hash,
+                                                    amdvi_dte_equal,
+                                                    g_free,
+                                                    amd_idev_destroy);
 
     /* Set up PCI Capability base address */
     pci_set_long(s->pci->dev.config + s->pci->capab_offset + AMDVI_CAPAB_BAR_LOW,
@@ -1324,7 +1311,7 @@ static void amd_viommu_sysbus_realize(DeviceState *dev, Error **errp)
 static void amd_viommu_unrealize(DeviceState *dev)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
-    struct amd_as_key *key;
+    struct AMDVI_dte_key *key;
     GHashTableIter it;
     AMDIOMMUFDDevice *amd_idev;
     Error *local_err = NULL;
@@ -1357,7 +1344,7 @@ static void amd_viommu_unrealize(DeviceState *dev)
 static void amd_viommu_sysbus_reset(DeviceState *dev)
 {
     AMDVIState *s = AMD_VIOMMU_DEVICE(dev);
-          struct amd_as_key *key;
+          struct AMDVI_dte_key *key;
       GHashTableIter it;
       AMDIOMMUFDDevice *amd_idev;
       Error *local_err = NULL;
