@@ -523,6 +523,8 @@ struct AMDVIState {
     uint32_t mig_hdr_payload_size;
     uint8_t *mig_blob;
     uint32_t mig_blob_len;
+    /* A payload arrived and is waiting for a vIOMMU to restore it onto */
+    bool mig_restore_pending;
     MemoryRegion mr_vf_mmio;       /* 3st 4K for HW-vIOMMU (VF MMIO) */
     MemoryRegion mr_vf_ctrl_mmio;  /* 1st 4K for HW-vIOMMU (VF CTRL MMIO) */
     void *vf_mmio_page;           /* MMIO mmap pointer */
