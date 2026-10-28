@@ -483,16 +483,6 @@ struct AMDVIState {
     PCIBus *root_bus;
 
     /*HW VIOMMU fields */
-    /* Hash Table
-     * key: AMDVI_dte_key {bus, devfn}
-     * data: HostIOMMUDevice
-     * hash: amd_dte_hash
-     * compare: amd_dte_equal
-     * Note:
-     * Insert during amdvi_set_iommu_device()
-     * Lookup during amdvi_set_iommu_device() to see if already been done
-     */
-    GHashTable *hiod_hash;
     /* AMD IOMMU HW info */
     struct iommu_hw_info_amd hwinfo;
 
@@ -501,11 +491,12 @@ struct AMDVIState {
 
     /* Hash Table
      * key: AMDVI_dte_key {bus, devfn}
-     * data: AMDIOMMUFDDevice
-     * hash: amd_as_hash
-     * compare: amd_as_equal
+     * data: AMDIOMMUFDDevice, which owns its @hiod reference
+     * hash: amdvi_dte_hash
+     * compare: amdvi_dte_equal
      * Note:
      * Insert during amdvi_set_iommu_device()
+     * Remove during amdvi_unset_iommu_device()
      * Iterate during amd_viommu_state_change_running()
      * Lookup during amd_viommu_get_device_from_bdf()
      */
