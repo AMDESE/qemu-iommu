@@ -9,6 +9,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "qemu/cutils.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
@@ -849,6 +850,21 @@ static const SaveVMHandlers savevm_vfio_handlers = {
 
 /* ---------------------------------------------------------------------- */
 
+/*
+ * VM state change notifiers also run outside a migration, for example from
+ * vm_shutdown() on poweroff. By then migration_shutdown() has dropped the
+ * last reference on the migration object, so its qemu_file_lock is gone.
+ * Only an active migration has a file to fail; otherwise report the error.
+ */
+static void vfio_migration_report_error(int ret, Error *err)
+{
+    if (migration_is_running()) {
+        migration_file_set_error(ret, err);
+    } else if (err) {
+        error_report_err(err);
+    }
+}
+
 static void vfio_vmstate_change_prepare(void *opaque, bool running,
                                         RunState state)
 {
@@ -868,7 +884,7 @@ static void vfio_vmstate_change_prepare(void *opaque, bool running,
          * Migration should be aborted in this case, but vm_state_notify()
          * currently does not support reporting failures.
          */
-        migration_file_set_error(ret, local_err);
+        vfio_migration_report_error(ret, local_err);
     }
 
     trace_vfio_vmstate_change_prepare(vbasedev->name, running,
@@ -882,6 +898,12 @@ static void vfio_vmstate_change(void *opaque, bool running, RunState state)
     enum vfio_device_mig_state new_state;
     Error *local_err = NULL;
     int ret;
+
+    if (running && vbasedev->pause_failed) {
+        error_report("%s: pause drain failed; not resetting the device",
+                     vbasedev->name);
+        return;
+    }
 
     if (running) {
         new_state = VFIO_DEVICE_STATE_RUNNING;
@@ -899,12 +921,52 @@ static void vfio_vmstate_change(void *opaque, bool running, RunState state)
          * Migration should be aborted in this case, but vm_state_notify()
          * currently does not support reporting failures.
          */
-        migration_file_set_error(ret, local_err);
+        vfio_migration_report_error(ret, local_err);
     }
 
     trace_vfio_vmstate_change(vbasedev->name, running, RunState_str(state),
                               mig_state_to_str(new_state));
 }
+
+static int vfio_migration_pause_prepare(void)
+{
+    VFIODevice *vbasedev, *done;
+    int ret = 0;
+
+    QLIST_FOREACH(vbasedev, &vfio_device_list, global_next) {
+        if (!vbasedev->pause_prepare) {
+            continue;
+        }
+        ret = vbasedev->pause_prepare(vbasedev);
+        if (ret) {
+            break;
+        }
+    }
+    if (!ret) {
+        return 0;
+    }
+
+    /*
+     * The device that failed has restored its doorbell BAR and set
+     * pause_failed. Devices drained before it are sitting in GSV_STOP
+     * and need the function restarted before the guest runs again.
+     */
+    QLIST_FOREACH(done, &vfio_device_list, global_next) {
+        if (done == vbasedev) {
+            break;
+        }
+        if (done->pause_rollback) {
+            done->pause_rollback(done);
+        }
+    }
+    return ret;
+}
+
+static void vfio_migration_register_pause_prepare(void)
+{
+    migration_set_pause_prepare(vfio_migration_pause_prepare);
+}
+type_init(vfio_migration_register_pause_prepare);
 
 static int vfio_migration_state_notifier(NotifierWithReturn *notifier,
                                          MigrationEvent *e, Error **errp)
@@ -916,6 +978,12 @@ static int vfio_migration_state_notifier(NotifierWithReturn *notifier,
     int ret;
 
     trace_vfio_migration_state_notifier(vbasedev->name, e->type);
+
+    if (e->type == MIG_EVENT_PRECOPY_FAILED && vbasedev->pause_failed) {
+        error_report("%s: pause drain failed; not resetting the device",
+                     vbasedev->name);
+        return 0;
+    }
 
     if (e->type == MIG_EVENT_PRECOPY_FAILED) {
         /*

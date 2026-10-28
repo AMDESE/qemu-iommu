@@ -94,6 +94,18 @@ typedef struct VFIODevice {
     int *region_fds;
     VFIODeviceCPR cpr;
     VFIOUserProxy *proxy;
+
+    /*
+     * Optional SDXI pause drain. pause_prepare runs while vCPUs still
+     * run; pause_rollback undoes it. Both stay NULL for devices that
+     * have nothing to drain.
+     * pause_failed: the drain ioctl failed. Do not move this device
+     * back to RUNNING; that transition resets a function still in
+     * soft-stop.
+     */
+    int (*pause_prepare)(VFIODevice *vbasedev);
+    void (*pause_rollback)(VFIODevice *vbasedev);
+    bool pause_failed;
 } VFIODevice;
 
 struct VFIODeviceOps {
