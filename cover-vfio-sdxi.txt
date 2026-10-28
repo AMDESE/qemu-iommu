@@ -1,0 +1,98 @@
+VFIO SDXI live migration
+========================
+
+SDXI keeps its descriptor rings and context state in guest RAM. The
+host variant driver, sdxi-vfio-pci, saves and restores only the small
+set of writable BAR0 control registers, and the existing VFIO
+migration interface already carries those. Pausing the function is
+the part that does not fit that interface. An outstanding page
+request can be answered only while the guest is still running, and
+QEMU pauses vCPUs before it moves a VFIO device to STOP.
+
+This series adds a vfio-sdxi PCI variant and drains the function
+before vCPUs are paused. Two fixes that showed up while migrating
+the device, and that do not depend on SDXI, come first.
+
+Fixes
+-----
+1. hw/vfio: Fix liveness check in vfio_connect_kvm_msi_virq()
+
+   Loading the migration stream crashed. An unused MSI vector was
+   passed to the CPR vector-fd helper.
+
+2. hw/pci: clear reserved bytes in a masked 64-bit MSI cap
+
+   A 64-bit MSI capability with a per-vector mask has two reserved
+   bytes between Message Data and Mask Bits. The source kept the
+   hardware image there and a function reset cleared it on the
+   destination, so the config-space check rejected the stream.
+
+Device
+------
+3. hw/vfio: Add PRI/PASID ext capabilities for passthru VF
+
+   A VF has no PRI or PASID extended capability of its own. The
+   interface belongs to the parent PF. Behind an AMD vIOMMU, copy
+   those capabilities into the VF's emulated config space. Writes
+   to the synthetic ranges stay emulated.
+
+4. hw/vfio/sdxi: add vfio-sdxi variant with VFIO migration
+
+   The variant forces VFIO migration on. Passed-through config bytes
+   are left out of the migration compare. Read-only fields such as
+   the link capability can differ after a function reset.
+
+Plumbing
+--------
+5. linux-headers: sync vfio.h for the SDXI pause feature
+
+   VFIO_DEVICE_FEATURE_SDXI_PAUSE is feature index 13.
+
+6. migration: add a hook that runs before vCPUs are paused
+
+   One callback, invoked from migration_stop_vm() with the BQL
+   dropped. A failure aborts the stop and leaves the guest running.
+
+7. vfio/migration: run per-device pause prepare and rollback
+
+   Each VFIO device may supply pause_prepare and pause_rollback.
+   If one device fails, devices already drained are rolled back.
+   The device that failed sets pause_failed. Moving it back to
+   RUNNING would reset a function that is still in soft-stop, so
+   both the vmstate-change path and the precopy-failed notifier
+   skip that reset.
+
+8. vfio/region: let a device trap a BAR write
+
+   trap_mmio_write returns true when the device consumed the write.
+   replay_doorbells runs after the device is back in RUNNING.
+
+Drain
+-----
+9. hw/vfio/sdxi: trap and migrate BAR2 doorbells
+
+   Swallowed 8-byte doorbell writes are stored per offset, migrated
+   with the device, and written back after the function is running
+   on the destination. The device is assumed not to fetch a new
+   descriptor from the write index alone.
+
+10. hw/vfio/sdxi: drain the function before vCPUs pause
+
+    BAR2 is trapped, but each doorbell is still written through
+    while the drain runs, so the guest can retire the descriptor
+    the soft-stop is waiting on. Once the function has stopped,
+    further doorbells are held for replay. On timeout the BAR is
+    returned without ringing a doorbell a second time, and
+    pause_failed is set.
+
+Kernel
+------
+Requires the sdxi-vfio-pci variant driver and
+VFIO_DEVICE_FEATURE_SDXI_PAUSE. The feature ioctl drains until the
+function stops, or resumes it after a failed drain, without a VFIO
+migration state change and without resetting the device.
+
+Base
+----
+Applies on top of the vIOMMU migration series, the commit before
+"--- VFIO SDXI ---".
