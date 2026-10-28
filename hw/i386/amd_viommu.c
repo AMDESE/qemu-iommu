@@ -2,6 +2,7 @@
 
 #include "hw/core/qdev-properties.h"
 #include "hw/pci/pci_device.h"
+#include "migration/blocker.h"
 #include "migration/misc.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -170,6 +171,12 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
     }
 
     /*
+     * Every other device has to be on this same nesting parent, since the
+     * kernel object just allocated describes that one.
+     */
+    s->nest_parent_hwpt_id = amd_idev->v1_hwpt.hwpt_id;
+
+    /*
      * The capability describes the host IOMMU this vIOMMU was allocated on. It
      * says that IOMMU can migrate a vIOMMU, not that it can migrate this one:
      * a vIOMMU of a type it cannot handle still refuses IOMMU_VIOMMU_MIG_STATE.
@@ -180,6 +187,93 @@ static int amdvi_viommu_initialized_one(AMDVIState *s, AMDIOMMUFDDevice *amd_ide
 
     s->enabled = true;
     return 0;
+}
+
+/*
+ * What has to hold before this vIOMMU can be saved and restored.  Evaluated
+ * over the endpoints assigned right now rather than at realize time, because
+ * these are properties of the whole set of devices and that set is not known
+ * until the guest turns the vIOMMU on.
+ *
+ * Reports the first one that fails.  Someone reading the message has to change
+ * one thing at a time regardless, and listing every reason at once describes a
+ * configuration that nobody asked for.
+ */
+static bool amdvi_mig_preconditions_met(AMDVIState *s, Error **errp)
+{
+    struct AMDVI_dte_key *key;
+    AMDIOMMUFDDevice *amd_idev;
+    GHashTableIter it;
+
+    if (!s->mig_supported) {
+        error_setg(errp, "amd-viommu: the host IOMMU cannot save and restore "
+                   "vIOMMU state");
+        return false;
+    }
+
+    g_hash_table_iter_init(&it, s->amd_iommufd_dev_hash);
+
+    while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
+        VFIODevice *vdev = amd_idev->hiod->agent;
+
+        if (amd_idev->v1_hwpt.hwpt_id != s->nest_parent_hwpt_id) {
+            error_setg(errp, "amd-viommu: device %s is not on the nesting "
+                       "parent this vIOMMU was allocated on", vdev->name);
+            return false;
+        }
+
+        /*
+         * The IOMMU's own writes to guest memory land in pages no device
+         * tracker reports, and behind a nesting vIOMMU the device tracker is
+         * refused outright, so this is the only mechanism that sees them.
+         */
+        if (!vdev->hwpt ||
+            !(vdev->hwpt->hwpt_flags & IOMMU_HWPT_ALLOC_DIRTY_TRACKING)) {
+            error_setg(errp, "amd-viommu: the nesting parent of device %s was "
+                       "allocated without dirty tracking", vdev->name);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/*
+ * Refuse migration up front, with a reason, rather than letting it fail partway
+ * through with the guest already stopped.  Called once every assigned device
+ * has been set up, because a precondition about the set of devices cannot be
+ * evaluated from inside the loop that builds it.
+ */
+static void amdvi_mig_blocker_update(AMDVIState *s)
+{
+    Error *local_err = NULL;
+    Error *reason = NULL;
+
+    /* Frees the previous reason, so this is also how a blocker is lifted. */
+    migrate_del_blocker(&s->mig_blocker);
+
+    /*
+     * Nothing has been allocated that would need saving.  A guest that never
+     * turns its vIOMMU on stays migratable.
+     */
+    if (!s->core) {
+        return;
+    }
+
+    if (amdvi_mig_preconditions_met(s, &reason)) {
+        return;
+    }
+
+    s->mig_blocker = reason;
+    if (migrate_add_blocker(&s->mig_blocker, &local_err) < 0) {
+        /*
+         * Either a migration is already under way, which is past the point
+         * where refusing it here would help, or --only-migratable was given
+         * and the guest is running anyway.  The save path checks the same
+         * preconditions and can still fail the stream.
+         */
+        error_report_err(local_err);
+    }
 }
 
 static int amd_viommu_setup_nest_parent(AMDIOMMUFDDevice *dev)
@@ -280,6 +374,7 @@ static void vdev_alloc_all(AMDVIState *s)
 }
 
 static void amdvi_mig_restore(AMDVIState *s);
+static void amdvi_mig_payload_reset(AMDVIState *s);
 
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
@@ -293,6 +388,9 @@ static void amd_viommu_state_change_running(AMDVIState *s)
     while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
         amdvi_vdevice_viommu_setup(s, amd_idev);
     }
+
+    /* The vIOMMU and its endpoints exist only after that loop. */
+    amdvi_mig_blocker_update(s);
 
     /*
      * The vDEVICEs are normally allocated from the guest's first IOMMU MMIO
@@ -352,6 +450,10 @@ static void amd_viommu_state_change_shutdown(AMDVIState *s)
         munmap(s->vf_mmio_page, AMDVI_PAGE_SIZE);
         s->vf_mmio_page = NULL;
     }
+
+    /* No-op unless the capability was missing.  Frees the reason. */
+    migrate_del_blocker(&s->mig_blocker);
+    amdvi_mig_payload_reset(s);
 
     amdvi_free_pprlog_hwq(s);
     amdvi_free_evtlog_hwq(s);
@@ -454,9 +556,12 @@ static void amdvi_mig_save(AMDVIState *s)
 
     amdvi_mig_payload_reset(s);
 
-    if (!s->mig_supported) {
-        error_setg(&local_err,
-                   "amd-viommu: the host IOMMU cannot save vIOMMU state");
+    /*
+     * The same preconditions the blocker was built from.  Checked again here
+     * because the blocker can only be registered while no migration is in
+     * flight, so it is an early refusal rather than the guarantee.
+     */
+    if (!amdvi_mig_preconditions_met(s, &local_err)) {
         migration_file_set_error(-ENOTSUP, local_err);
         return;
     }
@@ -1320,7 +1425,16 @@ static void amd_viommu_unset_iommu_device(PCIBus *bus, void *opaque,
         .devfn = devfn,
     };
 
-    g_hash_table_remove(s->amd_iommufd_dev_hash, &key);
+    if (!g_hash_table_remove(s->amd_iommufd_dev_hash, &key)) {
+        return;
+    }
+
+    /*
+     * The preconditions are about the set of assigned devices, and one just
+     * left it.  A device that was the reason migration was refused takes the
+     * refusal with it.
+     */
+    amdvi_mig_blocker_update(s);
 }
 
 static AddressSpace *amd_viommu_get_address_space(PCIBus *bus, void *opaque, int devfn)
