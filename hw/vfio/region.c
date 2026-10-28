@@ -65,6 +65,13 @@ void vfio_region_write(void *opaque, hwaddr addr,
         break;
     }
 
+    if (vbasedev->trap_mmio_write &&
+        vbasedev->trap_mmio_write(vbasedev, region->nr, addr, data, size)) {
+        trace_vfio_region_write(vbasedev->name, region->nr, addr, data, size);
+        vbasedev->ops->vfio_eoi(vbasedev);
+        return;
+    }
+
     ret = vbasedev->io_ops->region_write(vbasedev, region->nr,
                                          addr, size, &buf, region->post_wr);
     if (ret != size) {

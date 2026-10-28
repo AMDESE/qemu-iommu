@@ -97,14 +97,19 @@ typedef struct VFIODevice {
 
     /*
      * Optional SDXI pause drain. pause_prepare runs while vCPUs still
-     * run; pause_rollback undoes it. Both stay NULL for devices that
-     * have nothing to drain.
+     * run; pause_rollback undoes it. trap_mmio_write returns true when
+     * it consumed a BAR write. replay_doorbells runs after the device
+     * is back in RUNNING. All four stay NULL for non-SDXI devices.
+     * replay_doorbells is called with the BQL held.
      * pause_failed: the drain ioctl failed. Do not move this device
      * back to RUNNING; that transition resets a function still in
      * soft-stop.
      */
     int (*pause_prepare)(VFIODevice *vbasedev);
     void (*pause_rollback)(VFIODevice *vbasedev);
+    bool (*trap_mmio_write)(VFIODevice *vbasedev, uint8_t region,
+                            uint64_t addr, uint64_t data, unsigned size);
+    void (*replay_doorbells)(VFIODevice *vbasedev);
     bool pause_failed;
 } VFIODevice;
 
