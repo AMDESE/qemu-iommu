@@ -907,6 +907,9 @@ static void vfio_vmstate_change(void *opaque, bool running, RunState state)
          * currently does not support reporting failures.
          */
         migration_file_set_error(ret, local_err);
+    } else if (new_state == VFIO_DEVICE_STATE_RUNNING &&
+               vbasedev->replay_doorbells) {
+        vbasedev->replay_doorbells(vbasedev);
     }
 
     trace_vfio_vmstate_change(vbasedev->name, running, RunState_str(state),
@@ -981,6 +984,12 @@ static int vfio_migration_state_notifier(NotifierWithReturn *notifier,
                                                 &local_err);
         if (ret) {
             error_report_err(local_err);
+        } else if (vbasedev->replay_doorbells) {
+            /*
+             * sdxi_start has run. A failed transition leaves the
+             * doorbell list in place for the later vm_start() retry.
+             */
+            vbasedev->replay_doorbells(vbasedev);
         }
     }
     return 0;
