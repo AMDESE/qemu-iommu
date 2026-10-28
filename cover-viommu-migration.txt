@@ -1,0 +1,143 @@
+AMD vIOMMU live migration
+=========================
+
+An AMD hardware vIOMMU keeps the part the guest programmed in QEMU
+(the MMIO register file and the device table) and the part the host
+IOMMU allocated in the kernel (hardware queues, nested domains, and
+the vIOMMU object itself). Neither half is enough on its own. This
+series carries both, and refuses the migration when the host cannot
+restore what the guest will use.
+
+The device stays unmigratable until the last patch. Everything
+before that is reachable from the save and restore paths, and a
+bisect stops on the migration blocker or on .unmigratable rather
+than resuming a guest onto a vIOMMU that lost its kernel state.
+
+Setup
+-----
+1. amd_viommu: Make VF MMIO mapping idempotent
+
+   One VF MMIO page per vIOMMU. A second assigned device was mapping
+   it again and re-initialising a MemoryRegion that was already live.
+
+2. amd_viommu: Separate per-vIOMMU from per-device vIOMMU setup
+
+   The passthrough domain was allocated once per vIOMMU, inside the
+   guard that runs only for the first device. Each device needs its
+   own.
+
+3. amd_viommu: let one hash own the assigned devices
+
+   hiod_hash and amd_iommufd_dev_hash described the same devices,
+   shared a key allocation, and did not stay in step. Detach left a
+   record behind, and teardown freed objects the hashes still named.
+   One hash remains. Its value owns the HostIOMMUDevice reference.
+
+4. amd_viommu: give every assigned device its own vDEVICE
+
+   One idempotent entry point. The guest RID comes from the hash key
+   of the device being allocated, so two VFs can no longer be bound
+   to each other's RIDs. It stays off the realize path: bus numbers
+   are not valid until the guest has enumerated.
+
+Ordering
+--------
+5. amd_viommu: Assert teardown never runs during migration
+
+6. amd_viommu: Pin the vm change state handler priority
+
+   The vIOMMU sorts ahead of its endpoints. On stop that is enough,
+   because the ordinary handlers run after the endpoints have gone
+   quiet. Resume is a different phase and is handled with restore.
+
+Transport
+---------
+7. linux-headers: sync iommufd uAPI for vIOMMU migration
+
+   IOMMU_VIOMMU_MIG_STATE and IOMMU_HW_CAP_VIOMMU_MIGRATION.
+
+8. backends/iommufd: Add a wrapper for IOMMU_VIOMMU_MIG_STATE
+
+9. amd-viommu: Record whether the host IOMMU can migrate a vIOMMU
+
+10. amd-viommu: Add the iommufd migration VMState subsection
+
+    The kernel header and payload travel as raw bytes, with the
+    format version and payload size repeated as scalars so a
+    post_load hook can reject a payload that does not match.
+
+11. amd-viommu: Migrate the emulated MMIO register file
+
+    Queue replay and the log-interrupt replay read it back. The
+    version is 1, so a QEMU that predates this work rejects the
+    stream on load.
+
+Kernel object
+-------------
+12. vfio: Refuse device dirty tracking behind a nesting vIOMMU
+
+    Under nesting the device tracker reports stage-1 IOVAs and QEMU
+    applies them as guest physical. The container tracker is the one
+    that matches the memory QEMU migrates. The precondition below
+    relies on this.
+
+13. amd-viommu: Save the vIOMMU migration payload at FINISH_MIGRATE
+
+    PREPARE_SAVE, then GET_SIZE, then SAVE. Sizing first would race
+    a guest that is still filling the rings.
+
+14. amd_viommu: Restore the vIOMMU before VFIO releases the endpoints
+
+    Restore runs from a prepare callback. VFIO's prepare callback
+    moves an endpoint to RUNNING_P2P, where it may DMA, and that
+    phase runs before any ordinary vm-state handler. Priority among
+    ordinary handlers does not order the two phases.
+
+15. amd_viommu: refuse migration when its preconditions do not hold
+
+    The host must advertise vIOMMU migration. Every assigned
+    endpoint must sit on the nesting parent the vIOMMU was allocated
+    on. That parent must have been allocated with dirty tracking,
+    which is what sees the IOMMU's own writes. Checked once the
+    devices exist, again on the save path, and not fatal to vIOMMU
+    setup.
+
+16. amd-viommu: Stop the guest when a vIOMMU restore fails
+
+    By the time the run-state handler runs, the incoming migration
+    is already committed. A failed restore stops the guest instead
+    of letting it run on a vIOMMU that never received its state.
+
+Replay on the destination
+--------------------------
+17. amd-viommu: Replay the hardware queues on the destination
+
+18. amd-viommu: Migrate the guest device table
+
+19. amd-viommu: identify an instance by the buses it serves
+
+    Instance ids follow realize order, so a destination that lists
+    the vIOMMUs the other way round would hand each payload to the
+    instance that serves the other bus range. The bus range is what
+    travels, and what a wider last-bus-nr is compared against.
+
+20. amd-viommu: Replay the nested domains on the destination
+
+21. amd-viommu: Replay the log interrupt routes on the destination
+
+Enable
+------
+22. amd-viommu: allow the device to migrate
+
+    Drops .unmigratable. The cases that cannot migrate are refused
+    individually by the blocker.
+
+Kernel
+------
+Requires IOMMU_VIOMMU_MIG_STATE and IOMMU_HW_CAP_VIOMMU_MIGRATION
+on the host iommufd.
+
+Base
+----
+Applies on top of the multi-vIOMMU series, the commit before
+"--- VIOMMU MIGRATION ---".
