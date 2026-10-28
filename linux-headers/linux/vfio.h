@@ -1478,6 +1478,23 @@ struct vfio_device_feature_bus_master {
 };
 #define VFIO_DEVICE_FEATURE_BUS_MASTER 10
 
+/**
+ * VFIO_DEVICE_FEATURE_SDXI_PAUSE
+ *
+ * Stop or restart an SDXI function without a VFIO migration state change
+ * and without resetting the device. DRAIN polls until GSV_STOP so a guest
+ * that is still running can finish an outstanding PRI. RESUME activates
+ * the function again after a failed drain. timeout_ms applies to DRAIN;
+ * zero selects the driver default. A timeout returns -ETIMEDOUT.
+ */
+struct vfio_device_feature_sdxi_pause {
+	__u32 flags;
+#define VFIO_DEVICE_FEATURE_SDXI_PAUSE_DRAIN	(1 << 0)
+#define VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME	(1 << 1)
+	__u32 timeout_ms;
+};
+#define VFIO_DEVICE_FEATURE_SDXI_PAUSE		13
+
 /* -------- API for Type1 VFIO IOMMU -------- */
 
 /**
