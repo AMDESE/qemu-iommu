@@ -508,8 +508,12 @@ struct AMDVIState {
     /* IOMMUFD alloc vIOMMU stuff */
     struct iommu_viommu_amd iommufd_viommu_amd;
     IOMMUFDViommu *core;
+    /* The nesting parent @core was allocated on, which every device shares */
+    uint32_t nest_parent_hwpt_id;
     /* Host IOMMU can save and restore the state of the vIOMMU in @core */
     bool mig_supported;
+    /* Reason migration is refused, owned by the migration blocker list */
+    Error *mig_blocker;
 
     /*
      * vIOMMU migration payload, parked between the kernel ioctls and VMState.
