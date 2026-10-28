@@ -49,12 +49,26 @@
 #include "vfio-migration-internal.h"
 #include "vfio-helpers.h"
 
+typedef struct VFIOVirtExtCap {
+    uint16_t id;
+    uint8_t ver;
+    uint16_t pos;
+    uint16_t size;
+    uint8_t data[PCI_EXT_CAP_PRI_SIZEOF];
+} VFIOVirtExtCap;
+
 /* Protected by BQL */
 static KVMRouteChange vfio_route_change;
 
 static void vfio_disable_interrupts(VFIOPCIDevice *vdev);
 static void vfio_mmap_set_enabled(VFIOPCIDevice *vdev, bool enabled);
 static void vfio_msi_disable_common(VFIOPCIDevice *vdev);
+
+static bool vfio_range_contained(uint64_t first1, uint64_t len1,
+                                 uint64_t first2, uint64_t len2)
+{
+    return first1 >= first2 && first1 + len1 <= first2 + len2;
+}
 
 /* Create new or reuse existing eventfd */
 static bool vfio_notifier_init(VFIOPCIDevice *vdev, EventNotifier *e,
@@ -1423,6 +1437,24 @@ uint32_t vfio_pci_read_config(PCIDevice *pdev, uint32_t addr, int len)
     return val;
 }
 
+static bool vfio_is_synthetic_pri_pasid_range(VFIOPCIDevice *vdev,
+                                              uint32_t addr, int len)
+{
+    if (vdev->virt_pri_cap &&
+        vfio_range_contained(addr, len, vdev->virt_pri_cap,
+                             PCI_EXT_CAP_PRI_SIZEOF)) {
+        return true;
+    }
+
+    if (vdev->virt_pasid_cap &&
+        vfio_range_contained(addr, len, vdev->virt_pasid_cap,
+                             PCI_EXT_CAP_PASID_SIZEOF)) {
+        return true;
+    }
+
+    return false;
+}
+
 void vfio_pci_write_config(PCIDevice *pdev,
                            uint32_t addr, uint32_t val, int len)
 {
@@ -1433,12 +1465,14 @@ void vfio_pci_write_config(PCIDevice *pdev,
 
     trace_vfio_pci_write_config(vdev->vbasedev.name, addr, val, len);
 
-    /* Write everything to VFIO, let it filter out what we can't write */
-    ret = vfio_pci_config_space_write(vdev, addr, len, &val_le);
-    if (ret != len) {
-        error_report("%s(%s, 0x%x, 0x%x, 0x%x) failed: %s",
-                     __func__, vbasedev->name, addr, val, len,
-                    strwriteerror(ret));
+    if (!vfio_is_synthetic_pri_pasid_range(vdev, addr, len)) {
+        /* Write everything to VFIO, let it filter out what we can't write */
+        ret = vfio_pci_config_space_write(vdev, addr, len, &val_le);
+        if (ret != len) {
+            error_report("%s(%s, 0x%x, 0x%x, 0x%x) failed: %s",
+                         __func__, vbasedev->name, addr, val, len,
+                        strwriteerror(ret));
+        }
     }
 
     /* MSI/MSI-X Enabling/Disabling */
@@ -2498,10 +2532,176 @@ static int vfio_setup_rebar_ecap(VFIOPCIDevice *vdev, uint16_t pos)
     return 0;
 }
 
+static bool vfio_pci_viommu_attached(PCIDevice *pdev)
+{
+    PCIBus *bus = pci_get_bus(pdev);
+    PCIBus *iommu_bus = bus;
+    int devfn = pdev->devfn;
+
+    while (iommu_bus && !iommu_bus->iommu_ops && iommu_bus->parent_dev) {
+        PCIBus *parent_bus = pci_get_bus(iommu_bus->parent_dev);
+
+        if (!pci_bus_is_express(iommu_bus)) {
+            PCIDevice *parent = iommu_bus->parent_dev;
+
+            if (pci_is_express(parent) &&
+                pcie_cap_get_type(parent) == PCI_EXP_TYPE_PCI_BRIDGE) {
+                devfn = PCI_DEVFN(0, 0);
+                bus = iommu_bus;
+            } else {
+                devfn = parent->devfn;
+                bus = parent_bus;
+            }
+        }
+
+        iommu_bus = parent_bus;
+    }
+
+    assert(0 <= devfn && devfn < PCI_DEVFN_MAX);
+
+    return iommu_bus && !pci_bus_bypass_iommu(bus) &&
+           iommu_bus->iommu_ops &&
+           iommu_bus->iommu_ops->set_iommu_device;
+}
+
+static uint16_t vfio_host_find_ext_cap(const uint8_t *config, uint16_t cap_id)
+{
+    uint16_t next;
+
+    for (next = PCI_CONFIG_SPACE_SIZE; next;
+         next = PCI_EXT_CAP_NEXT(pci_get_long(config + next))) {
+        if (PCI_EXT_CAP_ID(pci_get_long(config + next)) == cap_id) {
+            return next;
+        }
+    }
+
+    return 0;
+}
+
+static bool vfio_read_host_config(const char *devpath, uint8_t *config,
+                                  size_t size)
+{
+    g_autofree char *cfgpath = g_strdup_printf("%s/config", devpath);
+    ssize_t ret;
+    int fd;
+
+    fd = open(cfgpath, O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+
+    ret = pread(fd, config, size, 0);
+    close(fd);
+
+    return ret == size;
+}
+
+static int vfio_collect_virt_ext_caps_from_config(const uint8_t *source_config,
+                                                  VFIOVirtExtCap *caps)
+{
+    static const struct {
+        uint16_t id;
+        uint16_t size;
+    } cap_defs[] = {
+        { PCI_EXT_CAP_ID_PRI, PCI_EXT_CAP_PRI_SIZEOF },
+        { PCI_EXT_CAP_ID_PASID, PCI_EXT_CAP_PASID_SIZEOF },
+    };
+    int count = 0;
+    int i;
+
+    for (i = 0; i < ARRAY_SIZE(cap_defs); i++) {
+        uint16_t pos;
+        uint32_t header;
+
+        pos = vfio_host_find_ext_cap(source_config, cap_defs[i].id);
+        if (!pos) {
+            continue;
+        }
+
+        header = pci_get_long(source_config + pos);
+        caps[count].id = cap_defs[i].id;
+        caps[count].ver = PCI_EXT_CAP_VER(header);
+        caps[count].pos = pos;
+        caps[count].size = cap_defs[i].size;
+        memcpy(caps[count].data, source_config + pos + PCI_CAP_SIZEOF,
+               cap_defs[i].size - PCI_CAP_SIZEOF);
+        count++;
+    }
+
+    return count;
+}
+
+static int vfio_collect_virt_pf_ext_caps(VFIOPCIDevice *vdev,
+                                         VFIOVirtExtCap *caps)
+{
+    g_autofree char *linkpath = NULL;
+    g_autofree char *physfn = NULL;
+    uint8_t pf_config[PCIE_CONFIG_SPACE_SIZE];
+    HostIOMMUDevice *hiod = vdev->vbasedev.hiod;
+
+    if (!vdev->vbasedev.sysfsdev || !vdev->viommu_attached ||
+        !hiod || hiod->caps.type != IOMMU_HW_INFO_TYPE_AMD) {
+        return 0;
+    }
+
+    /* VFs inherit the PF PRI/PASID interface exposed to the guest. */
+    linkpath = g_strdup_printf("%s/physfn", vdev->vbasedev.sysfsdev);
+    physfn = realpath(linkpath, NULL);
+    if (!physfn) {
+        return 0;
+    }
+
+    if (!vfio_read_host_config(physfn, pf_config, sizeof(pf_config))) {
+        return 0;
+    }
+
+    return vfio_collect_virt_ext_caps_from_config(pf_config, caps);
+}
+
+static void vfio_setup_virt_pri_pasid_cap(VFIOPCIDevice *vdev,
+                                          const VFIOVirtExtCap *cap)
+{
+    PCIDevice *pdev = PCI_DEVICE(vdev);
+
+    pcie_add_capability(pdev, cap->id, cap->ver, cap->pos, cap->size);
+    memcpy(pdev->config + cap->pos + PCI_CAP_SIZEOF, cap->data,
+           cap->size - PCI_CAP_SIZEOF);
+    memset(vdev->emulated_config_bits + cap->pos, 0xff, cap->size);
+
+    switch (cap->id) {
+    case PCI_EXT_CAP_ID_PRI:
+        vdev->virt_pri_cap = cap->pos;
+        pci_set_word(pdev->wmask + cap->pos + PCI_PRI_CTRL,
+                     PCI_PRI_CTRL_ENABLE | PCI_PRI_CTRL_RESET);
+        pci_set_long(pdev->wmask + cap->pos + PCI_PRI_ALLOC_REQ, ~0U);
+        break;
+    case PCI_EXT_CAP_ID_PASID: {
+        uint16_t pasid_wmask = PCI_PASID_CTRL_ENABLE;
+        uint16_t pasid_cap = pci_get_word(pdev->config + cap->pos +
+                                          PCI_PASID_CAP);
+
+        if (pasid_cap & PCI_PASID_CAP_EXEC) {
+            pasid_wmask |= PCI_PASID_CTRL_EXEC;
+        }
+        if (pasid_cap & PCI_PASID_CAP_PRIV) {
+            pasid_wmask |= PCI_PASID_CTRL_PRIV;
+        }
+
+        vdev->virt_pasid_cap = cap->pos;
+        pci_set_word(pdev->wmask + cap->pos + PCI_PASID_CTRL, pasid_wmask);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 static void vfio_add_ext_cap(VFIOPCIDevice *vdev)
 {
     PCIDevice *pdev = PCI_DEVICE(vdev);
+    VFIOVirtExtCap virt_caps[2] = { };
     uint32_t header;
+    int virt_cap_count, virt_idx = 0;
     uint16_t cap_id, next, size;
     uint8_t cap_ver;
     uint8_t *config;
@@ -2549,6 +2749,14 @@ static void vfio_add_ext_cap(VFIOPCIDevice *vdev)
     pci_set_long(pdev->wmask + PCI_CONFIG_SPACE_SIZE, 0);
     pci_set_long(vdev->emulated_config_bits + PCI_CONFIG_SPACE_SIZE, ~0);
 
+    virt_cap_count = vfio_collect_virt_pf_ext_caps(vdev, virt_caps);
+    if (virt_cap_count == 2 && virt_caps[0].pos > virt_caps[1].pos) {
+        VFIOVirtExtCap tmp = virt_caps[0];
+
+        virt_caps[0] = virt_caps[1];
+        virt_caps[1] = tmp;
+    }
+
     for (next = PCI_CONFIG_SPACE_SIZE; next;
          next = PCI_EXT_CAP_NEXT(pci_get_long(config + next))) {
         header = pci_get_long(config + next);
@@ -2567,6 +2775,17 @@ static void vfio_add_ext_cap(VFIOPCIDevice *vdev)
         pci_long_test_and_set_mask(vdev->emulated_config_bits + next,
                                    PCI_EXT_CAP_NEXT_MASK);
 
+        while (virt_idx < virt_cap_count && virt_caps[virt_idx].pos < next) {
+            vfio_setup_virt_pri_pasid_cap(vdev, &virt_caps[virt_idx++]);
+        }
+
+        /* Replace VF PRI/PASID with the PF-sourced copies above. */
+        if (virt_cap_count &&
+            (cap_id == PCI_EXT_CAP_ID_PRI || cap_id == PCI_EXT_CAP_ID_PASID)) {
+            trace_vfio_add_ext_cap_dropped(vdev->vbasedev.name, cap_id, next);
+            continue;
+        }
+
         switch (cap_id) {
         case 0: /* kernel masked capability */
         case PCI_EXT_CAP_ID_SRIOV: /* Read-only VF BARs confuse OVMF */
@@ -2582,6 +2801,10 @@ static void vfio_add_ext_cap(VFIOPCIDevice *vdev)
             pcie_add_capability(pdev, cap_id, cap_ver, next, size);
         }
 
+    }
+
+    while (virt_idx < virt_cap_count) {
+        vfio_setup_virt_pri_pasid_cap(vdev, &virt_caps[virt_idx++]);
     }
 
     /* Cleanup chain head ID if necessary */
@@ -3458,10 +3681,14 @@ static void vfio_pci_realize(PCIDevice *pdev, Error **errp)
         goto error;
     }
 
+    vdev->viommu_attached = false;
     if (!vbasedev->mdev &&
         !pci_device_set_iommu_device(pdev, vbasedev->hiod, errp)) {
         error_prepend(errp, "Failed to set vIOMMU: ");
         goto out_teardown;
+    }
+    if (!vbasedev->mdev) {
+        vdev->viommu_attached = vfio_pci_viommu_attached(pdev);
     }
 
     if (!vfio_pci_add_capabilities(vdev, errp)) {
@@ -3545,6 +3772,7 @@ out_deregister:
 out_unset_idev:
     if (!vbasedev->mdev) {
         pci_device_unset_iommu_device(pdev);
+        vdev->viommu_attached = false;
     }
 out_teardown:
     vfio_pci_teardown_msi(vdev);
@@ -3581,6 +3809,7 @@ static void vfio_exitfn(PCIDevice *pdev)
     vfio_migration_exit(vbasedev);
     if (!vbasedev->mdev) {
         pci_device_unset_iommu_device(pdev);
+        vdev->viommu_attached = false;
     }
 }
 
