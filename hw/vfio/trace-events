@@ -115,6 +115,9 @@ vfio_device_get(const char * name, unsigned int flags, unsigned int num_regions,
 vfio_device_put(int fd) "close vdev->fd=%d"
 
 # sdxi.c
+vfio_sdxi_pause(const char *name, const char *op) " (%s) %s"
+vfio_sdxi_pause_prepare(const char *name) " (%s)"
+vfio_sdxi_pause_rollback(const char *name) " (%s)"
 vfio_sdxi_note_doorbell(uint64_t addr, uint64_t data) "off 0x%"PRIx64" val 0x%"PRIx64
 
 # region.c

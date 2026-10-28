@@ -12,24 +12,43 @@
  * BAR0 control registers; everything else lives in guest RAM and is
  * captured as part of the VM memory snapshot.
  *
- * Doorbell writes that are swallowed are kept here, migrated with this
- * device, and written back after the function is running again. The
- * device is assumed not to fetch a new descriptor from the write index
- * alone.
+ * Before vCPUs are paused, BAR2 is trapped and the function is drained
+ * with VFIO_DEVICE_FEATURE_SDXI_PAUSE so an outstanding PRI can still
+ * be answered. Doorbell writes are stored from the moment the trap is
+ * installed, which is before the function is asked to stop. A write
+ * that reaches the device after it has accepted the stop is dropped,
+ * and soft-stopping often never appears in MMIO_STS0. The stored
+ * doorbells migrate with this device and are written back once it is
+ * running again. The device is assumed not to fetch a new descriptor
+ * from the write index alone.
  */
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "hw/pci/pci_device.h"
 #include "migration/vmstate.h"
 #include "pci.h"
 #include "vfio-region.h"
 #include "qom/object.h"
 #include "trace.h"
+#include <linux/vfio.h>
+#include <sys/ioctl.h>
 
 #define SDXI_DOORBELL_BAR 2
 #define SDXI_MAX_DOORBELLS 128
+#define SDXI_PAUSE_DRAIN_MS 30000
+#define SDXI_MMIO_CTL0 0x00000
+#define SDXI_MMIO_STS0 0x100
+#define SDXI_MMIO_CXT_L2 0x10000
+#define SDXI_FN_GSV_MASK 0x7
+#define SDXI_GSV_STOP 0
+#define SDXI_GSV_ACTIVE 2
+#define SDXI_CTL0_FN_PASID_VL (1ULL << 2)
+/* MMIO_CXT_L2 pointer is bits 63:12. */
+#define SDXI_CXT_L2_PTR (~UINT64_C(0xfff))
 
 #define TYPE_VFIO_SDXI "vfio-sdxi"
 OBJECT_DECLARE_SIMPLE_TYPE(VFIOSDXIDevice, VFIO_SDXI)
@@ -73,6 +92,29 @@ static const VMStateDescription vmstate_vfio_sdxi = {
 
 static DeviceRealize vfio_sdxi_parent_realize;
 static DeviceUnrealize vfio_sdxi_parent_unrealize;
+
+static int vfio_sdxi_pause_ioctl(VFIODevice *vbasedev, uint32_t op)
+{
+    uint64_t buf[DIV_ROUND_UP(sizeof(struct vfio_device_feature) +
+                              sizeof(struct vfio_device_feature_sdxi_pause),
+                              sizeof(uint64_t))] = {};
+    struct vfio_device_feature *feature = (struct vfio_device_feature *)buf;
+    struct vfio_device_feature_sdxi_pause *pause =
+        (struct vfio_device_feature_sdxi_pause *)feature->data;
+
+    feature->argsz = sizeof(buf);
+    feature->flags = VFIO_DEVICE_FEATURE_SET | VFIO_DEVICE_FEATURE_SDXI_PAUSE;
+    pause->flags = op;
+    pause->timeout_ms = SDXI_PAUSE_DRAIN_MS;
+    trace_vfio_sdxi_pause(vbasedev->name,
+                          op == VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME ?
+                          "resume" : "drain");
+
+    if (ioctl(vbasedev->fd, VFIO_DEVICE_FEATURE, feature)) {
+        return -errno;
+    }
+    return 0;
+}
 
 static void vfio_sdxi_note_doorbell(VFIOSDXIDevice *s, uint64_t offset,
                                     uint64_t value)
@@ -146,6 +188,123 @@ static void vfio_sdxi_replay_doorbells(VFIODevice *vbasedev)
     vfio_region_mmaps_set_enabled(region, true);
 }
 
+/* BQL held. Hand BAR2 back without writing a doorbell a second time. */
+static void vfio_sdxi_release_db_trap(VFIOSDXIDevice *s, VFIORegion *region)
+{
+    s->swallow_db = false;
+    s->nr_db = 0;
+    vfio_region_mmaps_set_enabled(region, true);
+}
+
+static bool vfio_sdxi_read64(VFIODevice *vbasedev, VFIORegion *bar0,
+                             hwaddr offset, uint64_t *val)
+{
+    uint64_t raw;
+
+    if (bar0->size < offset + sizeof(raw)) {
+        return false;
+    }
+    if (pread(vbasedev->fd, &raw, sizeof(raw),
+              bar0->fd_offset + offset) != (ssize_t)sizeof(raw)) {
+        return false;
+    }
+    *val = le64_to_cpu(raw);
+    return true;
+}
+
+/*
+ * Guest SDXI driver never programmed this function. The host has already
+ * run sdxi_fn_start(), so fn_gsv is GSV_ACTIVE rather than GSV_STOP and
+ * fn_gsr is not GSRV_RESET. No context-table pointer and no function
+ * PASID is the state a soft stop cannot quiesce: GSRV_STOP_SF lands in
+ * GSV_ERROR. A failed read, or GSV_ERROR, is not this case.
+ */
+static bool vfio_sdxi_guest_unprogrammed(VFIODevice *vbasedev)
+{
+    VFIORegion *bar0 = &VFIO_PCI_DEVICE(vbasedev->dev)->bars[0].region;
+    uint64_t ctl0, sts0, cxt_l2;
+    unsigned gsv;
+
+    if (!vfio_sdxi_read64(vbasedev, bar0, SDXI_MMIO_CTL0, &ctl0) ||
+        !vfio_sdxi_read64(vbasedev, bar0, SDXI_MMIO_STS0, &sts0) ||
+        !vfio_sdxi_read64(vbasedev, bar0, SDXI_MMIO_CXT_L2, &cxt_l2)) {
+        return false;
+    }
+    if (ctl0 == UINT64_MAX) {
+        return false;
+    }
+    gsv = sts0 & SDXI_FN_GSV_MASK;
+    if (gsv != SDXI_GSV_STOP && gsv != SDXI_GSV_ACTIVE) {
+        return false;
+    }
+    return !(cxt_l2 & SDXI_CXT_L2_PTR) && !(ctl0 & SDXI_CTL0_FN_PASID_VL);
+}
+
+static int vfio_sdxi_pause_prepare(VFIODevice *vbasedev)
+{
+    VFIOSDXIDevice *s = VFIO_SDXI(vbasedev->dev);
+    VFIOPCIDevice *vdev = VFIO_PCI_DEVICE(vbasedev->dev);
+    VFIORegion *region = &vdev->bars[SDXI_DOORBELL_BAR].region;
+    int ret;
+
+    trace_vfio_sdxi_pause_prepare(vbasedev->name);
+    vbasedev->pause_failed = false;
+    if (!region->size) {
+        error_report("vfio-sdxi: BAR2 is not mapped; cannot hold doorbells");
+        return -ENODEV;
+    }
+
+    /*
+     * Store doorbells before asking the function to stop. region_write
+     * holds the BQL across the device write, so taking it here means no
+     * forwarded doorbell is still in flight. The drain ioctl runs after
+     * the unlock.
+     */
+    bql_lock();
+    s->db_region = region->nr;
+    s->nr_db = 0;
+    s->swallow_db = true;
+    vfio_region_mmaps_set_enabled(region, false);
+    bql_unlock();
+
+    /*
+     * Do not ask the function to soft-stop when the guest never
+     * programmed it. The doorbell trap stays installed; there is no
+     * context to ring.
+     */
+    if (vfio_sdxi_guest_unprogrammed(vbasedev)) {
+        info_report("vfio-sdxi: %s: guest SDXI driver not programmed; "
+                    "skip pause drain", vbasedev->name);
+        return 0;
+    }
+
+    ret = vfio_sdxi_pause_ioctl(vbasedev, VFIO_DEVICE_FEATURE_SDXI_PAUSE_DRAIN);
+    if (!ret) {
+        return 0;
+    }
+
+    error_report("vfio-sdxi: pause drain failed: %s", strerror(-ret));
+    bql_lock();
+    vfio_sdxi_release_db_trap(s, region);
+    vbasedev->pause_failed = true;
+    bql_unlock();
+    return ret;
+}
+
+static void vfio_sdxi_pause_rollback(VFIODevice *vbasedev)
+{
+    int ret;
+
+    trace_vfio_sdxi_pause_rollback(vbasedev->name);
+    ret = vfio_sdxi_pause_ioctl(vbasedev, VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME);
+    if (ret) {
+        error_report("vfio-sdxi: pause resume failed: %s", strerror(-ret));
+    }
+    bql_lock();
+    vfio_sdxi_replay_doorbells(vbasedev);
+    bql_unlock();
+}
+
 static void vfio_sdxi_instance_init(Object *obj)
 {
     VFIOPCIDevice *vdev = VFIO_PCI_DEVICE(obj);
@@ -178,6 +337,8 @@ static void vfio_sdxi_realize(DeviceState *dev, Error **errp)
         }
     }
 
+    vdev->vbasedev.pause_prepare = vfio_sdxi_pause_prepare;
+    vdev->vbasedev.pause_rollback = vfio_sdxi_pause_rollback;
     vdev->vbasedev.trap_mmio_write = vfio_sdxi_trap_mmio_write;
     vdev->vbasedev.replay_doorbells = vfio_sdxi_replay_doorbells;
     vmstate_register(VMSTATE_IF(dev), VMSTATE_INSTANCE_ID_ANY,
