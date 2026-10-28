@@ -101,6 +101,13 @@ enum { CH_MAIN, CH_MULTIFD, CH_POSTCOPY };
 static MigrationState *current_migration;
 static MigrationIncomingState *current_incoming;
 
+/*
+ * Set by migration_shutdown() once it has dropped the reference on
+ * current_migration, which may then be freed. Readers must check this
+ * before dereferencing current_migration.
+ */
+static bool migration_shut_down;
+
 static GSList *migration_blockers[MIG_MODE__MAX];
 
 static bool migration_object_check(MigrationState *ms, Error **errp);
@@ -283,14 +290,42 @@ static gint page_request_addr_cmp(gconstpointer ap, gconstpointer bp)
     return (a > b) - (a < b);
 }
 
+static MigrationPausePrepareFn migration_pause_prepare_fn;
+
+void migration_set_pause_prepare(MigrationPausePrepareFn fn)
+{
+    migration_pause_prepare_fn = fn;
+}
+
 static int migration_stop_vm(MigrationState *s, RunState state)
 {
     int ret;
+    bool locked;
 
     migration_downtime_start(s);
 
     s->vm_old_state = runstate_get();
     global_state_store();
+
+    /*
+     * A device may still need a running vCPU, for example to finish a
+     * page request. Drain that before pause_all_vcpus(). The hook
+     * takes the BQL itself around its device update and drops it while
+     * the guest runs.
+     */
+    if (migration_pause_prepare_fn) {
+        locked = bql_locked();
+        if (locked) {
+            bql_unlock();
+        }
+        ret = migration_pause_prepare_fn();
+        if (locked) {
+            bql_lock();
+        }
+        if (ret) {
+            return ret;
+        }
+    }
 
     ret = vm_stop_force_state(state);
 
@@ -393,6 +428,7 @@ void migration_shutdown(void)
      * stop the migration using this structure
      */
     migration_cancel();
+    migration_shut_down = true;
     object_unref(OBJECT(current_migration));
 
     /*
@@ -1198,7 +1234,7 @@ bool migration_is_running(void)
 {
     MigrationState *s = current_migration;
 
-    if (!s) {
+    if (migration_shut_down || !s) {
         return false;
     }
 
