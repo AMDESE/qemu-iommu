@@ -27,6 +27,8 @@
  */
 static void amd_viommu_vm_state_change(void *opaque,
                                         bool running, RunState state);
+static void amd_viommu_vm_state_change_prepare(void *opaque,
+                                               bool running, RunState state);
 
 /*
  * vm change state handler priority for the vIOMMU.
@@ -43,6 +45,14 @@ static void amd_viommu_vm_state_change(void *opaque,
  * depth of at least one, so zero keeps the vIOMMU ahead of every endpoint.
  * The depth helper is private to hw/core, so the relationship cannot be
  * checked against VFIO at run time; pin our side of it here instead.
+ *
+ * Priority alone is not enough on resume.  vm_state_notify() runs every
+ * prepare callback before it runs any ordinary one, and VFIO uses a prepare
+ * callback to move the endpoint to RUNNING_P2P, which is a DMA-capable state.
+ * An endpoint with work still queued from the source starts that DMA there, so
+ * anything the vIOMMU has to put back has to be back before the prepare phase
+ * reaches VFIO.  Resume therefore runs as a prepare callback of our own, where
+ * the priority above orders us ahead of VFIO's.
  */
 #define AMD_VIOMMU_VM_STATE_PRIO 0
 QEMU_BUILD_BUG_ON(AMD_VIOMMU_VM_STATE_PRIO >= 1);
@@ -269,6 +279,8 @@ static void vdev_alloc_all(AMDVIState *s)
     s->vdevice_setup = true;
 }
 
+static void amdvi_mig_restore(AMDVIState *s);
+
 static void amd_viommu_state_change_running(AMDVIState *s)
 {
     struct AMDVI_dte_key *key;
@@ -281,6 +293,21 @@ static void amd_viommu_state_change_running(AMDVIState *s)
     while (g_hash_table_iter_next(&it, (void **)&key, (void **)&amd_idev)) {
         amdvi_vdevice_viommu_setup(s, amd_idev);
     }
+
+    /*
+     * The vDEVICEs are normally allocated from the guest's first IOMMU MMIO
+     * write, which is what tells us PCI enumeration has finished.  A restored
+     * guest enumerated on the source and may never write those registers
+     * again, so nothing would allocate them and every later attach would fail
+     * to resolve the device.  Its bus numbers arrived with the migrated PCI
+     * config space, so the enumeration this waits for has already happened.
+     */
+    if (s->mig_restore_pending) {
+        vdev_alloc_all(s);
+    }
+
+    /* The vIOMMU exists only after the loop above, so restore comes last. */
+    amdvi_mig_restore(s);
 }
 
 static void amdvi_free_cmdbuf_hwq(AMDVIState *s)
@@ -483,15 +510,94 @@ abort:
     amdvi_mig_abort(s);
 }
 
+/*
+ * Apply a payload that arrived in VMState, once the vIOMMU it belongs to has
+ * been allocated.  Every kernel operation unwinds itself on failure, so there
+ * is no abort to issue here.
+ *
+ * FIXME: a failure cannot fail the incoming migration.  On the destination
+ * there is no outgoing stream to set an error on, so this only reports, and the
+ * guest would go on to run against a vIOMMU that was never restored.  The
+ * VMState hook that could refuse cleanly runs too early to be used, since the
+ * vIOMMU does not exist yet, which is the reason the work is here at all.
+ */
+static void amdvi_mig_restore(AMDVIState *s)
+{
+    Error *local_err = NULL;
+    uint32_t len;
+
+    if (!s->mig_restore_pending) {
+        return;
+    }
+
+    /*
+     * Consume the payload whichever way this goes, so that a failure cannot
+     * leave a stale one behind to be applied by a later run state change.
+     */
+    s->mig_restore_pending = false;
+
+    if (!s->core) {
+        error_setg(&local_err, "amd-viommu: migrated vIOMMU state arrived but "
+                   "no vIOMMU was allocated to restore it onto");
+        migration_file_set_error(-EINVAL, local_err);
+        goto out;
+    }
+
+    if (!s->mig_supported) {
+        error_setg(&local_err,
+                   "amd-viommu: the host IOMMU cannot restore vIOMMU state");
+        migration_file_set_error(-ENOTSUP, local_err);
+        goto out;
+    }
+
+    len = s->mig_blob_len;
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_RESTORE, 0,
+                                          &s->mig_hdr, s->mig_blob, &len, NULL,
+                                          &local_err)) {
+        migration_file_set_error(-EIO, local_err);
+        goto out;
+    }
+
+    /*
+     * COMMIT_RESTORE arms the queues and flushes the caches, so anything else
+     * the destination has to replay onto this vIOMMU belongs before this point.
+     */
+    if (!iommufd_backend_viommu_mig_state(s->iommufd, s->core->viommu_id,
+                                          IOMMU_VIOMMU_MIG_OP_COMMIT_RESTORE,
+                                          0, NULL, NULL, NULL, NULL,
+                                          &local_err)) {
+        migration_file_set_error(-EIO, local_err);
+        goto out;
+    }
+
+    trace_amdvi_mig_restored(s->core->viommu_id, s->mig_blob_len);
+
+out:
+    amdvi_mig_payload_reset(s);
+}
+
+/*
+ * Resume runs here rather than in the handler below so that it lands before
+ * VFIO's own prepare callback lets the endpoints issue DMA; see the priority
+ * comment at the top of this file.
+ */
+static void amd_viommu_vm_state_change_prepare(void *opaque,
+                                               bool running, RunState state)
+{
+    AMDVIState *s = opaque;
+
+    if (state == RUN_STATE_RUNNING) {
+        amd_viommu_state_change_running(s);
+    }
+}
+
 static void amd_viommu_vm_state_change(void *opaque,
                                         bool running, RunState state)
 {
     AMDVIState *s = opaque;
 
     switch (state) {
-    case RUN_STATE_RUNNING:
-        amd_viommu_state_change_running(s);
-        break;
     case RUN_STATE_FINISH_MIGRATE:
     case RUN_STATE_SAVE_VM:
         /*
@@ -1343,6 +1449,12 @@ static bool amdvi_iommufd_mig_post_load(void *opaque, int version_id,
         return false;
     }
 
+    /*
+     * The vIOMMU does not exist yet, so the payload cannot be handed to the
+     * kernel from here; it is applied once the run state reaches RUNNING and
+     * the vIOMMU has been allocated.
+     */
+    s->mig_restore_pending = true;
     return true;
 }
 
@@ -1488,8 +1600,9 @@ static void amdvi_init(AMDVIState *s)
 	    s->dte_info[i].dte1 = ~0ULL;
     }
 
-    qemu_add_vm_change_state_handler_prio(amd_viommu_vm_state_change, s,
-                                          AMD_VIOMMU_VM_STATE_PRIO);
+    qemu_add_vm_change_state_handler_prio_full(
+        amd_viommu_vm_state_change, amd_viommu_vm_state_change_prepare,
+        NULL, s, AMD_VIOMMU_VM_STATE_PRIO);
 }
 
 
