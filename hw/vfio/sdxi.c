@@ -96,6 +96,9 @@ static int vfio_sdxi_pause_ioctl(VFIODevice *vbasedev, uint32_t op)
     feature->flags = VFIO_DEVICE_FEATURE_SET | VFIO_DEVICE_FEATURE_SDXI_PAUSE;
     pause->flags = op;
     pause->timeout_ms = SDXI_PAUSE_DRAIN_MS;
+    trace_vfio_sdxi_pause(vbasedev->name,
+                          op == VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME ?
+                          "resume" : "drain");
 
     if (ioctl(vbasedev->fd, VFIO_DEVICE_FEATURE, feature)) {
         return -errno;
@@ -201,6 +204,7 @@ static int vfio_sdxi_pause_prepare(VFIODevice *vbasedev)
     VFIORegion *region = &vdev->bars[SDXI_DOORBELL_BAR].region;
     int ret;
 
+    trace_vfio_sdxi_pause_prepare(vbasedev->name);
     vbasedev->pause_failed = false;
     if (!region->size) {
         error_report("vfio-sdxi: BAR2 is not mapped; cannot hold doorbells");
@@ -242,6 +246,7 @@ static void vfio_sdxi_pause_rollback(VFIODevice *vbasedev)
 {
     int ret;
 
+    trace_vfio_sdxi_pause_rollback(vbasedev->name);
     ret = vfio_sdxi_pause_ioctl(vbasedev, VFIO_DEVICE_FEATURE_SDXI_PAUSE_RESUME);
     if (ret) {
         error_report("vfio-sdxi: pause resume failed: %s", strerror(-ret));
