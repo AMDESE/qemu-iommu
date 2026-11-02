@@ -144,6 +144,8 @@ int vfio_migration_set_state(VFIODevice *vbasedev,
                                    mig_state_to_str(recover_state));
 
     if (new_state == migration->device_state) {
+        trace_vfio_migration_set_state_skip(vbasedev->name,
+                                            mig_state_to_str(new_state));
         return 0;
     }
 
@@ -151,6 +153,10 @@ int vfio_migration_set_state(VFIODevice *vbasedev,
     feature->flags =
         VFIO_DEVICE_FEATURE_SET | VFIO_DEVICE_FEATURE_MIG_DEVICE_STATE;
     mig_state->device_state = new_state;
+    trace_vfio_migration_set_state_ioctl(
+        vbasedev->name,
+        mig_state_to_str(migration->device_state),
+        mig_state_to_str(new_state));
     if (ioctl(vbasedev->fd, VFIO_DEVICE_FEATURE, feature)) {
         /* Try to set the device in some good state */
         ret = -errno;
