@@ -28,6 +28,7 @@
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
+#include "system/cpus.h"
 #include "hw/pci/pci_device.h"
 #include "migration/vmstate.h"
 #include "pci.h"
@@ -245,6 +246,7 @@ static int vfio_sdxi_pause_prepare(VFIODevice *vbasedev)
     VFIOSDXIDevice *s = VFIO_SDXI(vbasedev->dev);
     VFIOPCIDevice *vdev = VFIO_PCI_DEVICE(vbasedev->dev);
     VFIORegion *region = &vdev->bars[SDXI_DOORBELL_BAR].region;
+    VFIORegion *bar0 = &vdev->bars[0].region;
     int ret;
 
     trace_vfio_sdxi_pause_prepare(vbasedev->name);
@@ -279,6 +281,39 @@ static int vfio_sdxi_pause_prepare(VFIODevice *vbasedev)
     }
 
     ret = vfio_sdxi_pause_ioctl(vbasedev, VFIO_DEVICE_FEATURE_SDXI_PAUSE_DRAIN);
+    /*
+     * Debug hold. The function is still in the state the driver sampled
+     * (GSV_ERROR, or whatever gsv accompanied a nonempty error log). No
+     * further MMIO and no device reset. Freeze the vCPUs here, without
+     * vm_stop(), so the VFIO notifiers do not run STOP_COPY or sdxi_start.
+     * Never return: migration_stop_vm() would otherwise fail the migration
+     * and vm_start() would run the guest again.
+     */
+    if (ret == -EPROTO) {
+        QemuSemaphore hold;
+        uint64_t sts = UINT64_MAX;
+        unsigned gsv = 0xff;
+
+        if (bar0->size >= SDXI_MMIO_STS0 + sizeof(sts)) {
+            ssize_t n = pread(vbasedev->fd, &sts, sizeof(sts),
+                              bar0->fd_offset + SDXI_MMIO_STS0);
+
+            if (n == (ssize_t)sizeof(sts)) {
+                gsv = le64_to_cpu(sts) & SDXI_FN_GSV_MASK;
+            }
+        }
+        error_report("vfio-sdxi: %s: holding VM with vCPUs paused; "
+                     "fn_gsv=%u preserved, no reset",
+                     vbasedev->name, gsv);
+        vbasedev->pause_failed = true;
+        bql_lock();
+        pause_all_vcpus();
+        bql_unlock();
+        qemu_sem_init(&hold, 0);
+        for (;;) {
+            qemu_sem_wait(&hold);
+        }
+    }
     if (!ret) {
         return 0;
     }
