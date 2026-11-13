@@ -882,6 +882,12 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
             uint32_t virt_id = pci_get_bdf(&vfio_pci_dev->pdev);
             uint32_t vdevice_id;
 
+            if (!iommufd->viommu) {
+                error_setg(errp, "no TEE-IO vIOMMU for device %s",
+                           vbasedev->name);
+                return -1;
+            }
+
             if (!iommufd_backend_alloc_vdev(iommufd, idev->devid,
                                             iommufd->viommu->viommu_id, virt_id,
                                             &vdevice_id, errp)) {
@@ -894,6 +900,11 @@ static int iommufd_tsm_bind(VFIODevice *vbasedev, int kvmfd, Error **errp)
             idev->vdevice->idev = idev;
             idev->vdevice->viommu = iommufd->viommu;
         }
+    }
+
+    if (!idev->vdevice) {
+        error_setg(errp, "no vDEVICE for TEE-IO device %s", vbasedev->name);
+        return -1;
     }
 
     return iommufd_backend_tsm_bind(idev->vdevice, kvmfd);
