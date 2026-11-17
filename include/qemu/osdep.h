@@ -115,6 +115,23 @@ QEMU_EXTERN_C int daemon(int, int);
 
 #include <string.h>
 #include <strings.h>
+
+/*
+ * glibc 2.42 and later, with _GNU_SOURCE, define C23 const-generic macros
+ * for these search functions. A const argument then yields a const pointer.
+ * QEMU assigns those results to char * and builds with
+ * -Werror=discarded-qualifiers, so keep the historic char * prototypes.
+ */
+#ifdef __GLIBC_PREREQ
+#if __GLIBC_PREREQ(2, 42)
+#undef memchr
+#undef strchr
+#undef strrchr
+#undef strpbrk
+#undef strstr
+#endif
+#endif
+
 #include <inttypes.h>
 #include <limits.h>
 /* Put unistd.h before time.h as that triggers localtime_r/gmtime_r
