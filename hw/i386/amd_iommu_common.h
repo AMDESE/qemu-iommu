@@ -144,7 +144,7 @@ typedef struct AMDIVRSInfo {
 #define AMDVI_DEV_GCR3_30_15_MASK         GENMASK64(31, 16)
 #define AMDVI_DEV_GCR3_30_15_SHIFT        16
 #define AMDVI_DEV_GCR3_51_31_MASK         GENMASK64(63, 43)
-#define AMDVI_DEV_GCR3_51_31_SHIFT        58
+#define AMDVI_DEV_GCR3_51_31_SHIFT        43
 
 /* Device table entry bits 128:191 */
 #define AMDVI_DEV_G_PAGING_MODE_MASK      GENMASK64(55, 54)
