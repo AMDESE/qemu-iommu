@@ -3467,7 +3467,7 @@ static const Property vfio_pci_dev_properties[] = {
                      TYPE_IOMMUFD_BACKEND, IOMMUFDBackend *),
 #endif
     DEFINE_PROP_BOOL("skip-vsc-check", VFIOPCIDevice, skip_vsc_check, true),
-    DEFINE_PROP_BOOL("x-tio", VFIOPCIDevice, vbasedev.tee_io, true),
+    DEFINE_PROP_BOOL("x-tio", VFIOPCIDevice, vbasedev.tee_io, false),
     DEFINE_PROP_BOOL("x-tdi-locked", VFIOPCIDevice, tdi_config_locked, false),
 };
 
