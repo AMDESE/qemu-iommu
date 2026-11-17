@@ -861,6 +861,11 @@ static void amd_viommu_vm_state_change(void *opaque,
 static uint64_t amd_viommu_extended_feature_register(X86IOMMUState *x86_iommu)
 {
     AMDVIOMMUState *s = AMD_VIOMMU_DEVICE(x86_iommu);
+
+    if (!s->hwinfo) {
+        return 0;
+    }
+
     return s->hwinfo->efr & AMD_VIOMMU_SUPPORTED_EFR;
 }
 
@@ -869,7 +874,7 @@ static void amd_viommu_set_efrs_hwinfo(AMDVIOMMUState *s,
 {
     uint64_t efr;
 
-    s->hwinfo = hwinfo;
+    s->hwinfo = g_memdup2(hwinfo, sizeof(*s->hwinfo));
     efr = amd_viommu_extended_feature_register(&s->iommu);
     amd_viommu_set_quad(s, AMDVI_MMIO_EXT_FEATURES, efr,
                         0xffffffffffffffff, 0);
