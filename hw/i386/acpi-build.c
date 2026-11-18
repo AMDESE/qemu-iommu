@@ -2178,6 +2178,16 @@ static void insert_ivhd(PCIBus *bus, PCIDevice *dev, void *opaque)
     AmdIvhdDeviceEntry entry = {};
     GArray *table_data = opaque;
 
+    /*
+     * Root ports and other PCI bridges never issue DMA of their own, so
+     * do not make the guest put them behind the IOMMU. Devices below a
+     * bridge are described by the child bus walk in
+     * add_ivhd_entries_from_bus().
+     */
+    if (IS_PCI_BRIDGE(dev)) {
+        return;
+    }
+
     /* "Select" IVHD entry, type 0x2 */
     entry.type = AMD_IVHD_DEVICE_ENTRY_TYPE_SELECT;
     entry.devid = PCI_BUILD_BDF(pci_bus_num(bus), dev->devfn);
