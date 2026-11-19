@@ -2623,7 +2623,8 @@ void acpi_build(AcpiBuildTables *tables, MachineState *machine)
     x86_iommu = QLIST_FIRST(x86_iommus);
     iommu = DEVICE(&x86_iommu->busdev);
     if (object_dynamic_cast(OBJECT(iommu), TYPE_AMD_IOMMU_DEVICE) ||
-        object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE)) {
+        object_dynamic_cast(OBJECT(iommu), TYPE_AMD_VIOMMU_DEVICE) ||
+        object_dynamic_cast(OBJECT(iommu), TYPE_AMD_SVIOMMU_DEVICE)) {
         acpi_add_table(table_offsets, tables_blob);
         build_amd_iommu(tables_blob, tables->linker, x86ms->oem_id,
                         x86ms->oem_table_id);
