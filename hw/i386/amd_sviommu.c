@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/range.h"
 
 #include "hw/qdev-properties.h"
 #include "hw/pci/pci_device.h"
@@ -484,6 +485,93 @@ static void amd_sviommu_state_change(AMDSVIOMMUState *s)
     }
 }
 
+/*
+ * See amd_sviommu_vm_state_change(): VIOMMU_ALLOC is deferred until the
+ * parent bridge secondary bus number is programmed.
+ */
+typedef struct AMDSviommuBridgeHook {
+    PCIDevice *bridge;
+    PCIConfigWriteFunc *orig_write;
+    GList *pending;
+} AMDSviommuBridgeHook;
+
+static GHashTable *amd_sviommu_bridge_hooks;
+
+static void amd_sviommu_try_init(AMDSVIOMMUState *s)
+{
+    PCIBus *bus;
+
+    if (s->enabled || !s->pci) {
+        return;
+    }
+
+    bus = pci_get_bus(&s->pci->dev);
+    if (!bus || !pci_bus_num(bus)) {
+        return;
+    }
+
+    amd_sviommu_state_change(s);
+}
+
+static void amd_sviommu_bridge_config_write(PCIDevice *d, uint32_t addr,
+                                            uint32_t val, int len)
+{
+    AMDSviommuBridgeHook *hook;
+    GList *el, *next;
+
+    hook = g_hash_table_lookup(amd_sviommu_bridge_hooks, d);
+    g_assert(hook && hook->orig_write);
+    hook->orig_write(d, addr, val, len);
+
+    if (!ranges_overlap(addr, len, PCI_SECONDARY_BUS, 1)) {
+        return;
+    }
+
+    el = hook->pending;
+    while (el) {
+        AMDSVIOMMUState *s = el->data;
+
+        next = el->next;
+        amd_sviommu_try_init(s);
+        if (s->enabled) {
+            hook->pending = g_list_delete_link(hook->pending, el);
+        }
+        el = next;
+    }
+}
+
+static void amd_sviommu_defer_until_bus_num(AMDSVIOMMUState *s)
+{
+    PCIBus *bus = s->pci ? pci_get_bus(&s->pci->dev) : NULL;
+    PCIDevice *bridge = bus ? bus->parent_dev : NULL;
+    AMDSviommuBridgeHook *hook;
+
+    if (!bridge) {
+        error_report("amd-sviommu: IOMMU PCI device has no parent bridge");
+        exit(1);
+    }
+
+    if (!amd_sviommu_bridge_hooks) {
+        amd_sviommu_bridge_hooks = g_hash_table_new(NULL, NULL);
+    }
+
+    hook = g_hash_table_lookup(amd_sviommu_bridge_hooks, bridge);
+    if (!hook) {
+        hook = g_new0(AMDSviommuBridgeHook, 1);
+        hook->bridge = bridge;
+        hook->orig_write = bridge->config_write ?
+                           bridge->config_write : pci_default_write_config;
+        bridge->config_write = amd_sviommu_bridge_config_write;
+        g_hash_table_insert(amd_sviommu_bridge_hooks, bridge, hook);
+    }
+
+    if (!g_list_find(hook->pending, s)) {
+        hook->pending = g_list_append(hook->pending, s);
+    }
+
+    trace_amd_sviommu_defer_init();
+}
+
 static void amd_sviommu_vm_state_change(void *opaque,
                                         bool running, RunState state)
 {
@@ -491,7 +579,24 @@ static void amd_sviommu_vm_state_change(void *opaque,
 
     switch (state) {
     case RUN_STATE_RUNNING:
-        amd_sviommu_state_change(s);
+        /*
+         * hw-viommu allocates the vIOMMU here (amd_viommu_state_change_running).
+         * That ioctl does not carry a guest BDF; amd_viommu_alloc_vdev() reads
+         * pci_bus_num() later, when the guest sets AMDVIEN, after firmware has
+         * programmed bridge bus numbers.
+         *
+         * VIOMMU_ALLOC for a secure vIOMMU does carry the IOMMU function's
+         * guest BDF, and the host skips VIOMMU_GUEST_INIT when it is 0. The
+         * function sits behind a root port, so the BDF is 0 until firmware
+         * writes the bridge secondary bus register. The guest issues
+         * SETUP_VIOMMU before any IOMMU control write, so waiting for AMDVIEN
+         * is too late. Wait for that bus-number write instead.
+         */
+        if (s->pci && pci_bus_num(pci_get_bus(&s->pci->dev))) {
+            amd_sviommu_state_change(s);
+        } else {
+            amd_sviommu_defer_until_bus_num(s);
+        }
         break;
     case RUN_STATE_SHUTDOWN:
         if (!s->mmio_page3)
