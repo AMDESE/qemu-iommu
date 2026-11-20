@@ -29,6 +29,7 @@
 #include "hw/pci/pci_bus.h"
 #include "amd_iommu.h"
 #include "amd_viommu.h"
+#include "amd_sviommu.h"
 
 unsigned int x86_iommu_count;
 struct X86IOMMUList x86_iommu_list;
@@ -93,7 +94,8 @@ void x86_iommu_add(DeviceState *dev, Error **errp)
     X86IOMMUState *x86_iommu;
 
     if (!(object_dynamic_cast(OBJECT(dev), TYPE_AMD_IOMMU_DEVICE) ||
-          object_dynamic_cast(OBJECT(dev), TYPE_AMD_VIOMMU_DEVICE)) &&
+          object_dynamic_cast(OBJECT(dev), TYPE_AMD_VIOMMU_DEVICE) ||
+          object_dynamic_cast(OBJECT(dev), TYPE_AMD_SVIOMMU_DEVICE)) &&
         !QLIST_EMPTY(&x86_iommu_list)) {
         error_setg(errp, "QEMU does not support multiple vIOMMUs "
                     "for Intel and Virtio yet.");
