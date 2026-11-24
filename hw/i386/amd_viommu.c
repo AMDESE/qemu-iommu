@@ -684,6 +684,16 @@ static inline void amdvi_handle_devtab_mmio_write(AMDVIState *s)
     memory_region_add_subregion_overlap(get_system_memory(), offset, &s->devtab_mr, 1);
 }
 
+/*
+ * Guest MMIO stores the queue length as a 4-bit code in bits 63:56.
+ * IOMMU_HW_QUEUE_ALLOC takes that length in bytes: 16 << code, which the
+ * kernel writes back as ilog2(bytes) - 4. Code 9 is 8 KiB.
+ */
+static uint64_t amdvi_hwq_bytes(uint64_t base_reg)
+{
+    return 16ULL << ((base_reg >> 56) & 0xF);
+}
+
 static inline void amdvi_handle_control_write(AMDVIState *s)
 {
     unsigned long ctrl = amdvi_readq(s, AMDVI_MMIO_CONTROL);
@@ -719,7 +729,7 @@ static void amdvi_handle_cmdbase_write(AMDVIState *s, unsigned long ctrl)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_COMMAND_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
-    uint64_t len = (val >> 56) & 0xF;
+    uint64_t len = amdvi_hwq_bytes(val);
     uint32_t flags = 0;
 
     if (ctrl & (1UL << 12))
@@ -754,7 +764,7 @@ static void amdvi_handle_evtbase_write(AMDVIState *s, unsigned long ctrl)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_EVENT_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
-    uint64_t len = (val >> 56) & 0xF;
+    uint64_t len = amdvi_hwq_bytes(val);
     uint32_t flags = 0;
 
     if (ctrl & (1UL << 2))
@@ -789,7 +799,7 @@ static void amdvi_handle_pprbase_write(AMDVIState *s, unsigned long ctrl)
 {
     uint64_t val = amdvi_readq(s, AMDVI_MMIO_PPR_BASE);
     uint64_t addr = (val & 0xFFFFFFFFFF000ULL);
-    uint64_t len = (val >> 56) & 0xF;
+    uint64_t len = amdvi_hwq_bytes(val);
     uint32_t flags = 0;
 
     if (ctrl & (1UL << 13))
